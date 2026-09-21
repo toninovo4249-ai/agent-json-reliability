@@ -1,0 +1,9 @@
+# AGENT_JSON_RELIABILITY
+STATUS=BETA AUTH=NONE PAYMENT_REQUIRED=false LLM_REQUIRED=false DETERMINISTIC=true
+AI agents frequently emit malformed JSON. This service inspects, safely repairs, and schema-validates JSON without an LLM.
+Primary: POST /v1/json/reliable
+Capability: json_reliable
+MCP tools: reliable_json inspect_json repair_json validate_json
+Catalog: /.well-known/agent-services.json
+OpenAPI: /openapi.json
+Safe refusal when repair is ambiguous.
