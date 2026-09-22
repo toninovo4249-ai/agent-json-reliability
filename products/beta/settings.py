@@ -130,6 +130,7 @@ PUBLIC_PATHS = {
     "/v1/json/validate",
     "/v1/json/repair",
     "/v1/json/reliable",
+    "/v1/evidence/pack",
     "/mcp",
 }
 

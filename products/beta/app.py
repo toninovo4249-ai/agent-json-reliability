@@ -75,10 +75,16 @@ from products.beta.x402_gate import (
     settle_payment,
     valid_seller_receive_address,
 )
-from products.gateway.mcp_server import handle_rpc, mcp_server_card
+from products.fresh_web_evidence.metrics import evidence_metrics, record_pack
+from products.fresh_web_evidence.pack import build_pack
+from products.gateway.mcp_server import handle_rpc
 from products.gateway.rate_limit import RateLimiter
 
-ALLOWED_PREFIX = ("/v1/json/", "/.well-known/")
+ALLOWED_PREFIX = ("/v1/json/", "/v1/evidence/", "/.well-known/")
+
+
+def _tool_path(path: str) -> bool:
+    return path.startswith("/v1/json") or path.startswith("/v1/evidence")
 
 
 class BetaMiddleware(BaseHTTPMiddleware):
@@ -97,7 +103,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
         ctype, conf = ua_coarse(ua)
         ch = client_hash(request.client.host if request.client else None, ua)
         src = request.query_params.get("source")
-        if path.startswith("/v1/json"):
+        if _tool_path(path):
             if not limiter.allow(ch):
                 record_v16(
                     {
@@ -125,7 +131,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
         except Exception:
             body = b""
         if len(body) > MAX_REQUEST_BODY_BYTES:
-            if path.startswith("/v1/json"):
+            if _tool_path(path):
                 sem.release()
             return JSONResponse({"error": "payload too large", "error_class": "oversized"}, status_code=413)
 
@@ -148,7 +154,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
             if resp is None:
                 resp = await call_next(request)
         finally:
-            if path.startswith("/v1/json"):
+            if _tool_path(path):
                 try:
                     sem.release()
                 except ValueError:
@@ -157,7 +163,6 @@ class BetaMiddleware(BaseHTTPMiddleware):
         disc = path if path in {
             "/",
             "/.well-known/agent-services.json",
-            "/.well-known/mcp/server-card.json",
             "/capabilities",
             "/openapi.json",
             "/health",
@@ -282,6 +287,7 @@ def create_json_beta_app() -> FastAPI:
             "Free routes: GET /health, POST /v1/json/inspect, POST /v1/json/validate, "
             "POST /v1/json/repair, POST /mcp. "
             "Paid route: POST /v1/json/reliable. Unpaid calls return HTTP 402. "
+            "Free prototype: POST /v1/evidence/pack (no payment). "
             "Body: {\"text\": \"<json or malformed json>\", \"schema\": {optional JSON Schema}}."
         )
         schema["info"].pop("x-payment-required", None)
@@ -379,13 +385,14 @@ def create_json_beta_app() -> FastAPI:
             "x402_payment_integrated": payment_flags_on(),
             "X402_PAYMENT_ENABLED": X402_PAYMENT_ENABLED,
             "PAID_ROUTE_ENABLED": PAID_ROUTE_ENABLED,
-            "FIRST_PAID_BUYER_MODE": FIRST_PAID_BUYER_MODE,
             "MAINNET_PAYMENT_ENABLED": MAINNET_PAYMENT_ENABLED,
+            "FIRST_PAID_BUYER_MODE": FIRST_PAID_BUYER_MODE,
             "x402_middleware_present": True,
             "seller_receive_configured": valid_seller_receive_address(),
             "cdp_auth_configured": cdp_auth_configured(),
             **paid_metrics(),
             **acquisition_metrics(),
+            "fresh_web_evidence": evidence_metrics(),
         }
 
     @app.get("/ready")
@@ -403,7 +410,7 @@ def create_json_beta_app() -> FastAPI:
             "primary": "/v1/json/reliable",
             "primary_capability": "json_reliable",
             "paid_route": "/v1/json/reliable" if payment_flags_on() else None,
-            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp"],
+            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp", "/v1/evidence/pack"],
             "tools": [s["tool_name"] for s in public_catalog()["services"]],
             "html_exposed": ENABLE_HTML_BETA,
         }
@@ -411,10 +418,6 @@ def create_json_beta_app() -> FastAPI:
     @app.get("/.well-known/agent-services.json")
     def manifest():
         return public_catalog()
-
-    @app.get("/.well-known/mcp/server-card.json")
-    def mcp_server_card_route():
-        return mcp_server_card()
 
     @app.get("/.well-known/x402")
     def well_known_x402():
@@ -550,6 +553,31 @@ def create_json_beta_app() -> FastAPI:
                 status_code=402,
             )
         return result
+
+    @app.post("/v1/evidence/pack")
+    async def evidence_pack(request: Request):
+        body = _read(request)
+        try:
+            pack = build_pack(body)
+        except ValueError as e:
+            code = str(e)
+            status = 400
+            if code == "too_many_urls":
+                status = 400
+            raise HTTPException(status, code) from e
+        failures = sum(1 for s in pack["sources"] if s.get("error"))
+        ok = any(s.get("http_status") == 200 for s in pack["sources"]) and failures < len(pack["sources"])
+        if not pack["sources"]:
+            ok = False
+        record_pack(
+            client_hash=getattr(request.state, "client_hash", None),
+            url_count=len(pack["sources"]),
+            success=bool(ok),
+            fetch_failures=failures,
+            http_status=200,
+            paid=False,
+        )
+        return pack
 
     @app.post("/v1/json/reliable/batch", include_in_schema=bool(BATCH_PUBLIC))
     async def batch(request: Request):
