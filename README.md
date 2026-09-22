@@ -1,6 +1,35 @@
 # Agent JSON Reliability
 
-STATUS=BETA version `0.1.0`
+Deterministic JSON repair + JSON Schema validation for AI agents.  
+No LLM. Safe refusal on ambiguity.
+
+[![PyPI version](https://img.shields.io/pypi/v/agent-json-reliability.svg)](https://pypi.org/project/agent-json-reliability/)
+[![Python](https://img.shields.io/pypi/pyversions/agent-json-reliability.svg)](https://pypi.org/project/agent-json-reliability/)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20PyPI-555.svg)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.toninovo4249-ai%2Fagent-json-reliability)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+STATUS=BETA `0.1.0` · [GitHub](https://github.com/toninovo4249-ai/agent-json-reliability) · [PyPI](https://pypi.org/project/agent-json-reliability/) · [Official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.toninovo4249-ai%2Fagent-json-reliability)
+
+## Quick start
+
+```bash
+uvx agent-json-reliability
+```
+
+MCP client config (stdio, published package):
+
+```json
+{
+  "mcpServers": {
+    "agent-json-reliability": {
+      "command": "uvx",
+      "args": ["agent-json-reliability"]
+    }
+  }
+}
+```
+
+<!-- mcp-name: io.github.toninovo4249-ai/agent-json-reliability -->
 
 AI agents and software frequently emit malformed JSON: markdown fences, trailing commas, single quotes, `True`/`False`/`None`, and extra prose around one object.
 
@@ -11,15 +40,11 @@ AI agents and software frequently emit malformed JSON: markdown fences, trailing
 3. **validate** — optional JSON Schema check on the result
 4. **structured diagnostics** — `valid_original`, `repaired`, `valid_final`, `schema_valid`, `unsafe_or_ambiguous`, `changes`, `errors`
 
-This is not a generic jsonschema wrapper. The primary value is turning **malformed agent output** into reliable structured data **without an LLM** and **without inventing semantic values**.
+This is not a generic jsonschema wrapper. Missing semantic values are never invented. Ambiguous input is refused.
 
-When repair would require guessing (truncated objects, missing values, competing JSON documents), the service **refuses**. That is correct behavior.
+Primary HTTP endpoint (local/self-hosted): `POST /v1/json/reliable`
 
-Primary HTTP endpoint: `POST /v1/json/reliable`
-
-MCP tools (same core functions, no duplicate implementation): `json_reliable` / `reliable_json`, `validate_json`, `repair_json`, `inspect_json`
-
-<!-- mcp-name: io.github.toninovo4249-ai/agent-json-reliability -->
+MCP tools (same core functions): `reliable_json`, `validate_json`, `repair_json`, `inspect_json`
 
 ## Before / after (safe repair)
 
@@ -76,7 +101,7 @@ Share URLs (optional, unverified telemetry tags):
 
 ## MCP (stdio — durable)
 
-Package transport does not depend on a temporary public URL.
+Package transport does not depend on a temporary public URL. Prefer `uvx` (above). From a checkout:
 
 ```json
 {
@@ -89,9 +114,7 @@ Package transport does not depend on a temporary public URL.
 }
 ```
 
-After you publish to PyPI (free): `uvx agent-json-reliability`.
-
-Remote HTTP MCP (`POST /mcp`) is for a running instance. Prefer stdio/package for Official MCP Registry metadata.
+Remote HTTP MCP (`POST /mcp`) is for a running instance.
 
 ## Machine discovery
 

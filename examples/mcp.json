@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "agent-json-reliability": {
-      "command": "python",
-      "args": ["-m", "products.gateway.mcp_stdio"]
+      "command": "uvx",
+      "args": ["agent-json-reliability"]
     }
   }
 }
