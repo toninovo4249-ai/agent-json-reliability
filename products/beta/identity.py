@@ -45,9 +45,46 @@ DIRECTORY_CRAWLER_HINTS = (
     "x402scan",
     "agentcash",
     "402index",
+    "402 index",
+    "402index.io",
+    "indexnow",
     "payai",
     "lobehub",
+    "uptimerobot",
+    "betteruptime",
+    "betterstack",
+    "healthcheck",
+    "kube-probe",
+    "google-inspectiontool",
+    "bingpreview",
+    "duckduckbot",
 )
+
+DIRECTORY_SOURCES = {
+    "x402scan",
+    "402index",
+    "indexnow",
+    "payai",
+    "circle",
+    "bazaar",
+}
+
+SYNTHETIC_KINDS = {
+    "SYNTHETIC",
+    "SYNTHETIC_EXTERNAL_BUYER",
+    "SYNTHETIC_BUYER",
+    "INTERNAL_TEST",
+    "INTERNAL_EXTERNAL_PATH_TEST",
+    "KNOWN_SELF_TEST",
+    "LOCALHOST",
+}
+
+DIRECTORY_KINDS = {
+    "DIRECTORY_PROBE",
+    "LIKELY_CRAWLER",
+    "HEALTH_MONITOR",
+    "HEALTH_CHECK",
+}
 
 SELF_HINTS = (
     "x402-hunter",
@@ -137,32 +174,54 @@ def client_hash(ip: str | None, ua: str | None) -> str:
     return hmac.new(_daily_secret(), msg, hashlib.sha256).hexdigest()[:20]
 
 
-def traffic_kind(headers: Any, ua: str | None, client_host: str | None, path: str | None = None) -> str:
-    """Audience / telemetry class. REAL_EXTERNAL_UNKNOWN is the only class that counts as demand."""
+def traffic_kind(
+    headers: Any,
+    ua: str | None,
+    client_host: str | None,
+    path: str | None = None,
+    source: str | None = None,
+) -> str:
+    """Audience class. Only REAL_EXTERNAL_UNKNOWN may count as demand."""
     h = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
     ual = (ua or "").lower()
+    src = (source or h.get("x-discovery-source") or "").strip().lower()
     if h.get(PUBLIC_CHECK_HEADER) in {"1", "true"}:
-        return "INTERNAL_EXTERNAL_PATH_TEST"
+        return "SYNTHETIC"
     if h.get(INTERNAL_HEADER) == "1" or INTERNAL_UA in ual:
-        return "INTERNAL_TEST"
+        return "SYNTHETIC"
     if "pytest" in ual or "testclient" in ual:
-        return "INTERNAL_TEST"
+        return "SYNTHETIC"
     if h.get(SYNTHETIC_HEADER) in {"1", "true"}:
-        return "SYNTHETIC_EXTERNAL_BUYER"
+        return "SYNTHETIC"
     if any(x in ual for x in SELF_HINTS):
-        return "KNOWN_SELF_TEST"
+        return "SYNTHETIC"
+    if src in DIRECTORY_SOURCES:
+        return "DIRECTORY_PROBE"
     if any(x in ual for x in SCANNER_HINTS) and "python-httpx" not in ual:
         return "SECURITY_SCAN"
     if any(x in ual for x in CRAWLER_HINTS) or any(x in ual for x in DIRECTORY_CRAWLER_HINTS):
-        return "LIKELY_CRAWLER"
+        return "DIRECTORY_PROBE"
     if path in PROBE_PATHS:
         return "RANDOM_PROBE"
     if (client_host or "") in {"127.0.0.1", "::1", "testclient", "localhost"}:
-        return "LOCALHOST"
-    if path in {"/health", "/ready"} and (not ual or "health" in ual or "uptime" in ual or "monitor" in ual):
-        return "HEALTH_MONITOR"
+        return "SYNTHETIC"
+    if path in {"/health", "/ready"} and (not ual or "health" in ual or "uptime" in ual or "monitor" in ual or "render" in ual):
+        return "DIRECTORY_PROBE"
     return "REAL_EXTERNAL_UNKNOWN"
 
 
+def traffic_class(kind: str | None) -> str:
+    k = kind or ""
+    if k in SYNTHETIC_KINDS or k == "SYNTHETIC":
+        return "SYNTHETIC"
+    if k in DIRECTORY_KINDS or k == "DIRECTORY_PROBE":
+        return "DIRECTORY_PROBE"
+    if k in {"SECURITY_SCAN", "RANDOM_PROBE"}:
+        return "DIRECTORY_PROBE"
+    if k == "REAL_EXTERNAL_UNKNOWN":
+        return "REAL_EXTERNAL"
+    return "DIRECTORY_PROBE"
+
+
 def is_real_unknown(kind: str | None) -> bool:
-    return kind == "REAL_EXTERNAL_UNKNOWN"
+    return traffic_class(kind) == "REAL_EXTERNAL"

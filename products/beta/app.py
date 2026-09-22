@@ -120,14 +120,16 @@ class BetaMiddleware(BaseHTTPMiddleware):
         sem = request.app.state.sem
         ua = request.headers.get("user-agent")
         path = request.url.path
-        kind = traffic_kind(request.headers, ua, request.client.host if request.client else None, path)
+        src = request.query_params.get("source")
         ctype, conf = ua_coarse(ua)
         ch = client_hash(request.client.host if request.client else None, ua)
-        src = request.query_params.get("source")
+        kind = traffic_kind(request.headers, ua, request.client.host if request.client else None, path, source=src)
         pay_sig_early = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
         unpaid_paid = path in PAID_HTTP_PATHS and not pay_sig_early
+        directory_probe = kind in {"DIRECTORY_PROBE", "LIKELY_CRAWLER", "HEALTH_MONITOR"}
+        skip_quota = unpaid_paid or (directory_probe and not pay_sig_early)
         acquired_sem = False
-        if _tool_path(path) and not unpaid_paid:
+        if _tool_path(path) and not skip_quota:
             if not limiter.allow(ch):
                 record_v16(
                     {

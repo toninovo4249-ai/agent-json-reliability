@@ -587,7 +587,9 @@ def maybe_payment_response(request: Request, path: str) -> JSONResponse | None:
     raw = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
     payload = decode_payment_signature(raw)
     kind = str(getattr(request.state, "traffic_kind", "") or "")
-    is_real_event = kind not in {"SYNTHETIC_EXTERNAL_BUYER", "SYNTHETIC_BUYER", "INTERNAL_TEST", "LOCALHOST"}
+    from products.beta.identity import is_real_unknown
+
+    is_real_event = is_real_unknown(kind)
     pid = (prod or {}).get("id") or ("json_reliable" if path == PAID_AJR else "evidence_pack")
     if raw:
         paid_ledger.record_product_event(
