@@ -30,6 +30,39 @@ CRAWLER_HINTS = (
     "scrapy",
 )
 
+MCP_REGISTRY_HINTS = (
+    "mcp-publisher",
+    "modelcontextprotocol",
+    "official mcp",
+    "mcp registry",
+    "glama",
+    "smithery",
+    "pulsemcp",
+    "mcp.so",
+)
+
+SEARCH_CRAWLER_HINTS = (
+    "googlebot",
+    "bingbot",
+    "yandex",
+    "baiduspider",
+    "duckduckbot",
+    "applebot",
+    "amazonbot",
+    "facebookexternalhit",
+    "twitterbot",
+    "slackbot",
+    "discordbot",
+    "ahrefs",
+    "semrush",
+    "bytespider",
+    "gptbot",
+    "claudebot",
+    "petalbot",
+    "google-inspectiontool",
+    "bingpreview",
+)
+
 DIRECTORY_CRAWLER_HINTS = (
     "glama",
     "pulsemcp",
@@ -85,6 +118,9 @@ DIRECTORY_KINDS = {
     "HEALTH_MONITOR",
     "HEALTH_CHECK",
 }
+
+SEARCH_KINDS = {"SEARCH_CRAWLER"}
+MCP_KINDS = {"MCP_REGISTRY_PROBE"}
 
 SELF_HINTS = (
     "x402-hunter",
@@ -199,7 +235,11 @@ def traffic_kind(
         return "DIRECTORY_PROBE"
     if any(x in ual for x in SCANNER_HINTS) and "python-httpx" not in ual:
         return "SECURITY_SCAN"
-    if any(x in ual for x in CRAWLER_HINTS) or any(x in ual for x in DIRECTORY_CRAWLER_HINTS):
+    if any(x in ual for x in MCP_REGISTRY_HINTS):
+        return "MCP_REGISTRY_PROBE"
+    if any(x in ual for x in SEARCH_CRAWLER_HINTS):
+        return "SEARCH_CRAWLER"
+    if any(x in ual for x in DIRECTORY_CRAWLER_HINTS) or any(x in ual for x in CRAWLER_HINTS):
         return "DIRECTORY_PROBE"
     if path in PROBE_PATHS:
         return "RANDOM_PROBE"
@@ -207,21 +247,25 @@ def traffic_kind(
         return "SYNTHETIC"
     if path in {"/health", "/ready"} and (not ual or "health" in ual or "uptime" in ual or "monitor" in ual or "render" in ual):
         return "DIRECTORY_PROBE"
-    return "REAL_EXTERNAL_UNKNOWN"
+    return "REAL_EXTERNAL_AGENT"
 
 
 def traffic_class(kind: str | None) -> str:
     k = kind or ""
     if k in SYNTHETIC_KINDS or k == "SYNTHETIC":
         return "SYNTHETIC"
+    if k in SEARCH_KINDS:
+        return "SEARCH_CRAWLER"
+    if k in MCP_KINDS:
+        return "MCP_REGISTRY_PROBE"
     if k in DIRECTORY_KINDS or k == "DIRECTORY_PROBE":
         return "DIRECTORY_PROBE"
     if k in {"SECURITY_SCAN", "RANDOM_PROBE"}:
         return "DIRECTORY_PROBE"
-    if k == "REAL_EXTERNAL_UNKNOWN":
-        return "REAL_EXTERNAL"
+    if k in {"REAL_EXTERNAL_UNKNOWN", "REAL_EXTERNAL_AGENT"}:
+        return "REAL_EXTERNAL_AGENT"
     return "DIRECTORY_PROBE"
 
 
 def is_real_unknown(kind: str | None) -> bool:
-    return traffic_class(kind) == "REAL_EXTERNAL"
+    return traffic_class(kind) == "REAL_EXTERNAL_AGENT"

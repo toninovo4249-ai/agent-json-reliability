@@ -167,6 +167,7 @@ PUBLIC_PATHS = {
     "/v1/catalog/select",
     "/products",
     "/.well-known/agent-products.json",
+    "/skill.md",
     "/mcp",
 }
 

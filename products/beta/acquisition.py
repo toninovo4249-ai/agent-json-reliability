@@ -33,6 +33,7 @@ FREE_PATHS = {
     "/v1/catalog/select",
     "/products",
     "/.well-known/agent-products.json",
+    "/skill.md",
 }
 PAID_PATH = "/v1/json/reliable"
 SWEEP_DISTINCT_PAID_402 = 6
@@ -105,16 +106,18 @@ def classify_event(row: dict[str, Any], sweep: set[str]) -> str:
 def _unknown(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     paid = _paid_paths()
     sweep = directory_sweep_hashes(rows, paid)
-    return [r for r in rows if classify_event(r, sweep) == "REAL_EXTERNAL"]
+    return [r for r in rows if classify_event(r, sweep) == "REAL_EXTERNAL_AGENT"]
 
 
 def acquisition_metrics(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     rows = _rows() if rows is None else rows
     paid = _paid_paths()
     sweep = directory_sweep_hashes(rows, paid)
-    real = [r for r in rows if classify_event(r, sweep) == "REAL_EXTERNAL"]
+    real = [r for r in rows if classify_event(r, sweep) == "REAL_EXTERNAL_AGENT"]
     directory = [r for r in rows if classify_event(r, sweep) == "DIRECTORY_PROBE"]
     synthetic = [r for r in rows if classify_event(r, sweep) == "SYNTHETIC"]
+    search = [r for r in rows if classify_event(r, sweep) == "SEARCH_CRAWLER"]
+    mcp_reg = [r for r in rows if classify_event(r, sweep) == "MCP_REGISTRY_PROBE"]
 
     def free_ok(group: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -137,6 +140,15 @@ def acquisition_metrics(rows: list[dict[str, Any]] | None = None) -> dict[str, A
         for r in real
         if (r.get("endpoint") or "") == "/v1/catalog/select" and int(r.get("http_status") or 0) == 200
     ]
+    skill_views = [r for r in real if (r.get("endpoint") or "") == "/skill.md" and int(r.get("http_status") or 0) == 200]
+    mcp_disc = [r for r in real if (r.get("probe_class") or "") == "mcp_discovery"]
+    attr = defaultdict(int)
+    for r in real:
+        src = str(r.get("self_reported_source") or "unknown").lower()
+        if src in {"circle", "x402scan", "mcp_registry", "mcp-registry", "glama", "402index", "payai"}:
+            attr[src.replace("-", "_")] += 1
+        else:
+            attr["unknown"] += 1
     c402 = calls_402(real)
     d402 = calls_402(directory)
     s402 = calls_402(synthetic)
@@ -175,11 +187,19 @@ def acquisition_metrics(rows: list[dict[str, Any]] | None = None) -> dict[str, A
         "TOTAL_UNKNOWN_EXTERNAL_402_CALLS": real_402_n,
         "REAL_EXTERNAL_FREE_CALLS": len(free_ok(real)),
         "REAL_EXTERNAL_402_CALLS": real_402_n,
+        "REAL_EXTERNAL_AGENT_402_CALLS": real_402_n,
         "DIRECTORY_402_PROBES": len(d402),
         "SYNTHETIC_402_PROBES": len(s402),
+        "SEARCH_CRAWLER_402_PROBES": len(calls_402(search)),
+        "MCP_REGISTRY_402_PROBES": len(calls_402(mcp_reg)),
         "PAYMENT_ATTEMPTS": len(attempts),
         "CATALOG_EXTERNAL_VIEWS": len(catalog_views),
+        "CATALOG_VIEWS": len(catalog_views),
         "CATALOG_EXTERNAL_SELECTIONS": len(catalog_sel),
+        "SELECTOR_CALLS": len(catalog_sel),
+        "SKILL_MD_VIEWS": len(skill_views),
+        "MCP_DISCOVERY_TOOL_CALLS": len(mcp_disc),
+        "ATTRIBUTION": dict(attr),
         "UNKNOWN_EXTERNAL_402_BY_ENDPOINT": dict(by_402),
         "REAL_EXTERNAL_402_BY_ENDPOINT": dict(by_402),
         "PAYMENT_ATTEMPTS_BY_ENDPOINT": dict(by_att),

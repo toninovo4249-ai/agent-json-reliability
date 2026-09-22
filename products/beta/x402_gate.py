@@ -291,35 +291,20 @@ def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
             "Fresh Web Evidence Pack for AI agents. "
             "Fetches up to 5 public URLs at request time and returns structured facts with source URLs, "
             "UTC timestamps, SHA-256 provenance, and explicit contradictions."
-        )
+        )[:200]
         amount = evidence_atomic_amount()
         price = price_usdc_for_path(PAID_EVIDENCE)
-        ext = evidence_bazaar_extensions()
     elif resource_path == PAID_AJR:
         desc = "Deterministic JSON inspect, safe repair, and optional JSON Schema validation."
         amount = atomic_amount()
         price = price_usdc_for_path(PAID_AJR)
-        ext = bazaar_extensions()
     else:
-        desc = (prod or {}).get("description") or "Deterministic agent utility."
+        desc = ((prod or {}).get("description") or "Deterministic agent utility.")[:200]
         amount = amount_for_path(resource_path)
         price = price_usdc_for_path(resource_path)
-        from products.beta.store_catalog import META
+    from products.beta.store_catalog import bazaar_info
 
-        body_schema = (META.get((prod or {}).get("id") or "") or {}).get("input_schema") or {"type": "object"}
-        ext = {
-            "bazaar": {
-                "info": {
-                    "input": {
-                        "type": "http",
-                        "method": "POST",
-                        "bodyType": "json",
-                        "bodySchema": body_schema,
-                    },
-                    "output": {"example": {"ok": True}},
-                }
-            }
-        }
+    ext = bazaar_info(prod) if prod else bazaar_extensions()
     return {
         "x402Version": 2,
         "error": "PAYMENT-SIGNATURE header is required",

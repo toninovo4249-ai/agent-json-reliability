@@ -28,6 +28,7 @@ from products.beta.landing import (
     llms_txt,
     robots_txt,
     sitemap_xml,
+    skill_md,
     well_known_agent_json,
 )
 from products.beta.security import schema_limits, walk_limits
@@ -126,7 +127,13 @@ class BetaMiddleware(BaseHTTPMiddleware):
         kind = traffic_kind(request.headers, ua, request.client.host if request.client else None, path, source=src)
         pay_sig_early = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
         unpaid_paid = path in PAID_HTTP_PATHS and not pay_sig_early
-        directory_probe = kind in {"DIRECTORY_PROBE", "LIKELY_CRAWLER", "HEALTH_MONITOR"}
+        directory_probe = kind in {
+            "DIRECTORY_PROBE",
+            "LIKELY_CRAWLER",
+            "HEALTH_MONITOR",
+            "SEARCH_CRAWLER",
+            "MCP_REGISTRY_PROBE",
+        }
         skip_quota = unpaid_paid or (directory_probe and not pay_sig_early)
         acquired_sem = False
         if _tool_path(path) and not skip_quota:
@@ -204,12 +211,13 @@ class BetaMiddleware(BaseHTTPMiddleware):
             "/.well-known/agent-products.json",
             "/v1/catalog",
             "/products",
+            "/skill.md",
             "/mcp",
         } else None
         probe = None
         if resp.status_code == 404 and path not in PUBLIC_PATHS and not path.startswith("/v1/json"):
             probe = "RANDOM_PROBE"
-            if kind == "REAL_EXTERNAL_UNKNOWN":
+            if kind in {"REAL_EXTERNAL_UNKNOWN", "REAL_EXTERNAL_AGENT"}:
                 kind = "RANDOM_PROBE"
         pay_sig = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
         if path in PAID_HTTP_PATHS and pay_sig:
@@ -217,7 +225,11 @@ class BetaMiddleware(BaseHTTPMiddleware):
         mcp_product_call = False
         if path == "/mcp":
             try:
-                mcp_product_call = json.loads(body or b"{}").get("method") == "tools/call"
+                mcp_body = json.loads(body or b"{}")
+                mcp_product_call = mcp_body.get("method") == "tools/call"
+                tname = str(((mcp_body.get("params") or {}).get("name") or ""))
+                if mcp_product_call and tname in {"list_paid_products", "select_paid_product"}:
+                    probe = "mcp_discovery"
             except Exception:
                 mcp_product_call = False
         track = path.startswith("/v1/") or disc is not None or probe is not None
@@ -569,6 +581,7 @@ def create_json_beta_app() -> FastAPI:
                 "/mcp",
                 "/v1/catalog",
                 "/v1/catalog/select",
+                "/skill.md",
             ],
             "tools": [s["tool_name"] for s in public_catalog()["services"]],
             "html_exposed": ENABLE_HTML_BETA,
@@ -606,6 +619,7 @@ def create_json_beta_app() -> FastAPI:
         n = len(resources)
         instructions = (
             f"Agent Utility Store: {n} paid x402 resources. "
+            f"Catalog {base}/v1/catalog. Skill {base}/skill.md. "
             "POST /v1/json/reliable is 0.003 USDC. POST /v1/evidence/pack is 0.0075 USDC. "
             "inspect/validate/repair and MCP stay free. Pay-per-call Base USDC."
         )
@@ -613,7 +627,16 @@ def create_json_beta_app() -> FastAPI:
             "version": 1,
             "resources": resources,
             "instructions": instructions,
+            "catalog": base + "/v1/catalog",
+            "select": base + "/v1/catalog/select",
+            "skill": base + "/skill.md",
+            "openapi": base + "/openapi.json",
+            "agent": base + "/.well-known/agent.json",
         }
+
+    @app.get("/skill.md", response_class=PlainTextResponse)
+    def skill_doc():
+        return skill_md()
 
     @app.get("/.well-known/agent.json")
     def well_known_agent():

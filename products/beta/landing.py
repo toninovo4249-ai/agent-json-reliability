@@ -81,7 +81,9 @@ def landing_html() -> str:
      · <a href="/llms.txt">llms.txt</a> · <a href="/AGENTS.md">AGENTS.md</a>
      · <a href="/sitemap.xml">sitemap.xml</a>
      · <a href="/.well-known/agent.json">/.well-known/agent.json</a>
-     · <a href="/.well-known/x402">/.well-known/x402</a></p>
+     · <a href="/.well-known/x402">/.well-known/x402</a>
+     · <a href="/skill.md">/skill.md</a>
+     · <a href="/v1/catalog">/v1/catalog</a></p>
   <h2>curl</h2>
   <pre>{escape(curl)}</pre>
   <h2>Python</h2>
@@ -156,7 +158,7 @@ AI agents frequently emit malformed JSON. This API deterministically inspects, r
 5. Send {{"text": "<json or malformed json>", "schema": {{optional JSON Schema}}}}
 6. Do not invent values if repaired=false
 7. {pay_note}
-8. Machine discovery: {base}/openapi.json {base}/.well-known/x402 {base}/.well-known/agent-products.json {base}/sitemap.xml {base}/llms.txt
+8. Machine discovery: {base}/openapi.json {base}/.well-known/x402 {base}/.well-known/agent.json {base}/skill.md {base}/llms.txt {base}/v1/catalog
 
 Limits: body 262144 bytes, depth 64, 30 requests/minute/session.
 PyPI: uvx agent-json-reliability
@@ -182,6 +184,7 @@ def llms_txt() -> str:
         f"deterministic=true llm_required=false mixed_pricing={str(paid).lower()}\n"
         f"Catalog: {base}/v1/catalog\n"
         f"Select: POST {base}/v1/catalog/select {{\"task\":\"...\"}}\n"
+        f"Skill: {base}/skill.md\n"
         f"Agent products: {base}/.well-known/agent-products.json\n"
         f"OpenAPI: {base}/openapi.json\n"
         f"x402: {base}/.well-known/x402\n"
@@ -201,7 +204,7 @@ def llms_full_txt() -> str:
         llms_txt()
         + "\n# Free HTTP\n"
         "POST /v1/json/inspect POST /v1/json/validate POST /v1/json/repair POST /mcp\n"
-        "GET /v1/catalog POST /v1/catalog/select GET /.well-known/agent-products.json\n"
+        "GET /v1/catalog POST /v1/catalog/select GET /skill.md GET /.well-known/agent-products.json\n"
         "# Paid HTTP\n"
         "24 x402 products in GET /v1/catalog and GET /openapi.json. "
         "POST /v1/json/reliable 0.003 USDC. POST /v1/evidence/pack 0.0075 USDC.\n"
@@ -247,6 +250,7 @@ def discovery_get_paths() -> list[str]:
         "/.well-known/agent.json",
         "/.well-known/agent-products.json",
         "/v1/catalog",
+        "/skill.md",
         "/capabilities",
     ]
 
@@ -260,6 +264,35 @@ def sitemap_xml() -> str:
         f"{urls}\n"
         "</urlset>\n"
     )
+
+
+def skill_md() -> str:
+    base = discovery_server_url().rstrip("/")
+    return f"""# Agent Utility Store skill
+
+Service: deterministic JSON + web/evidence/URL/OpenAPI utilities. No LLM.
+
+Catalog: {base}/v1/catalog
+Selector: POST {base}/v1/catalog/select {{"task":"<need>"}}
+Skill: {base}/skill.md
+OpenAPI: {base}/openapi.json
+x402: {base}/.well-known/x402
+Agent: {base}/.well-known/agent.json
+Services: {base}/.well-known/agent-services.json
+llms: {base}/llms.txt
+AGENTS: {base}/AGENTS.md
+
+Categories: json, web, evidence, url_security, api, mcp_x402 (24 paid POST routes).
+
+Free discovery: GET catalog, POST select, GET skill.md, GET openapi.json, POST /mcp tools list_paid_products and select_paid_product.
+Free work: POST {base}/v1/json/inspect|validate|repair
+
+Paid: x402 exact on Base (eip155:8453) USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913.
+Unpaid POST to a paid path returns HTTP 402 PAYMENT-REQUIRED. Send PAYMENT-SIGNATURE after facilitator verify. Work runs only after verify. AJR 0.003 USDC. Evidence Pack 0.0075 USDC.
+
+Paid path pattern: POST {base}/v1/{{json|web|evidence|url|api|mcp|x402}}/...
+Do not invent JSON values when repaired=false. Never send owner PAYMENT-SIGNATURE from this skill.
+"""
 
 
 def json_ld_software() -> str:
@@ -303,6 +336,10 @@ def well_known_agent_json() -> dict:
         "mcp": base + "/mcp",
         "catalog": base + "/v1/catalog",
         "catalog_select": base + "/v1/catalog/select",
+        "skill": base + "/skill.md",
+        "x402": base + "/.well-known/x402",
+        "llms": base + "/llms.txt",
+        "agents": base + "/AGENTS.md",
         "agent_products": base + "/.well-known/agent-products.json",
         "paid_endpoint": base + "/v1/json/reliable",
         "price_usdc": "0.003",

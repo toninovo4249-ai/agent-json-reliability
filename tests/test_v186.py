@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from products.beta.acquisition import acquisition_metrics, classify_event, directory_sweep_hashes
 from products.beta.app import create_json_beta_app
 from products.beta.identity import traffic_class, traffic_kind
-from products.beta.index_status import BATCH_LIMIT, counts, queue_ids, seed_v185
+from products.beta.index_status import BATCH_LIMIT, counts, mark_pending_retry, next_submit_at, queue_ids, seed_v185
 from products.beta.product_registry import PRODUCTS
 
 
@@ -14,13 +14,14 @@ def test_traffic_class_directory_and_synthetic():
     assert traffic_kind({"user-agent": "x402scan-bot/1"}, "x402scan-bot/1", "1.2.3.4", "/v1/json/reliable") == "DIRECTORY_PROBE"
     assert traffic_class("DIRECTORY_PROBE") == "DIRECTORY_PROBE"
     assert traffic_kind({"user-agent": "402index crawler"}, "402index crawler", "1.2.3.4", "/v1/web/extract") == "DIRECTORY_PROBE"
-    assert traffic_kind({}, "Googlebot/2.1", "1.2.3.4", "/v1/catalog") == "DIRECTORY_PROBE"
+    assert traffic_kind({}, "Googlebot/2.1", "1.2.3.4", "/v1/catalog") == "SEARCH_CRAWLER"
+    assert traffic_class("SEARCH_CRAWLER") == "SEARCH_CRAWLER"
     assert traffic_kind({"x-synthetic-buyer": "1"}, "Mozilla/5.0", "8.8.8.8", "/v1/json/reliable") == "SYNTHETIC"
     assert traffic_kind({}, "cursor/1.0", "8.8.8.8", "/v1/json/reliable") == "SYNTHETIC"
     assert traffic_kind({}, "x402-hunter-v186", "8.8.8.8", "/health") == "SYNTHETIC"
-    assert traffic_kind({}, "SomeAgent/1.0", "8.8.8.8", "/v1/json/reliable") == "REAL_EXTERNAL_UNKNOWN"
+    assert traffic_kind({}, "SomeAgent/1.0", "8.8.8.8", "/v1/json/reliable") == "REAL_EXTERNAL_AGENT"
     assert traffic_kind({}, "SomeAgent/1.0", "8.8.8.8", "/v1/json/reliable", source="x402scan") == "DIRECTORY_PROBE"
-    assert traffic_class("REAL_EXTERNAL_UNKNOWN") == "REAL_EXTERNAL"
+    assert traffic_class("REAL_EXTERNAL_UNKNOWN") == "REAL_EXTERNAL_AGENT"
 
 
 def test_acquisition_excludes_directory_and_sweep(monkeypatch):
@@ -59,14 +60,15 @@ def test_acquisition_excludes_directory_and_sweep(monkeypatch):
     sweep = directory_sweep_hashes(rows, paid)
     assert "indexer" in sweep
     assert classify_event(rows[0], sweep) == "DIRECTORY_PROBE"
-    assert classify_event(rows[-2], sweep) == "REAL_EXTERNAL"
+    assert classify_event(rows[-2], sweep) == "REAL_EXTERNAL_AGENT"
     m = acquisition_metrics(rows)
     assert m["DIRECTORY_402_PROBES"] >= 24
     assert m["REAL_EXTERNAL_402_CALLS"] == 1
     assert m["PAYMENT_ATTEMPTS"] == 0
 
 
-def test_402index_queue_no_duplicates():
+def test_402index_queue_no_duplicates(monkeypatch, tmp_path):
+    monkeypatch.setattr("products.beta.index_status.STATUS_FILE", tmp_path / "402index_status.json")
     data = seed_v185()
     c = counts(data)
     assert c["SUBMITTED_PENDING"] == 4
@@ -76,15 +78,13 @@ def test_402index_queue_no_duplicates():
     assert len(q) == 10
     assert len(set(q)) == 10
     assert "json_reliable" not in q
-    assert q[0] in {
-        "json_diff",
-        "web_tables",
-        "web_metadata",
-        "web_link_map",
-        "evidence_pack",
-        "evidence_compare",
-    }
-    assert BATCH_LIMIT == 10
+    marked = mark_pending_retry(data, next_submit_at(data), "hourly_cap_no_wait")
+    assert len(marked) == 20
+    assert data["earliest_retry_at"]
+    c2 = counts(data)
+    assert c2["PENDING_RETRY"] == 20
+    assert c2["SUBMITTED_PENDING"] == 4
+    assert c2["NOT_SUBMITTED"] == 0
 
 
 def test_directory_probe_skips_app_quota(monkeypatch, tmp_path):

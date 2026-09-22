@@ -18,6 +18,9 @@ STATUS=BETA `0.1.0` · [GitHub](https://github.com/toninovo4249-ai/agent-json-re
 | Hosted `POST /v1/json/inspect`, `/validate`, `/repair`, `/mcp` | Free |
 | Hosted `POST /v1/json/reliable` | **0.003 USDC** on Base via x402 |
 
+Machine catalog: https://agent-json-reliability.onrender.com/v1/catalog  
+Skill: https://agent-json-reliability.onrender.com/skill.md
+
 ## Quick start
 
 ```bash

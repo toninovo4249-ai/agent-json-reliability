@@ -223,6 +223,44 @@ META: dict[str, dict[str, Any]] = {
     },
 }
 
+DESC_LIMIT = 200
+
+EXAMPLE_IO: dict[str, dict[str, Any]] = {
+    "json_reliable": {"input": {"text": "{'a': 1}"}, "output": {"valid_original": False, "repaired": True, "valid_final": True, "json": {"a": 1}}},
+    "json_contract_check": {"input": {"json": {"a": 1}, "schema": {"type": "object"}}, "output": {"valid": True, "missing_keys": [], "additional_keys": []}},
+    "json_diff": {"input": {"before": {"a": 1}, "after": {"a": 2}}, "output": {"changed_values": [{"path": "a"}], "structural_compatibility": True}},
+    "web_extract": {"input": {"url": "https://example.com/"}, "output": {"title": "Example", "headings": [], "main_text": "", "provenance": {}}},
+    "web_markdown": {"input": {"url": "https://example.com/"}, "output": {"markdown": "# Example", "sha256": "", "source_url": "https://example.com/"}},
+    "web_tables": {"input": {"url": "https://example.com/"}, "output": {"tables": [{"columns": [], "rows": []}]}},
+    "web_metadata": {"input": {"url": "https://example.com/"}, "output": {"title": "Example", "canonical": "https://example.com/", "opengraph": {}}},
+    "web_link_map": {"input": {"url": "https://example.com/"}, "output": {"internal": [], "external": [], "counts": {}}},
+    "evidence_pack": {"input": {"urls": ["https://example.com/"]}, "output": {"facts": [], "sources": [], "contradictions": [], "winner": None}},
+    "evidence_compare": {"input": {"urls": ["https://example.com/", "https://example.org/"]}, "output": {"agreements": [], "differences": [], "winner": None}},
+    "evidence_contradictions": {"input": {"urls": ["https://example.com/", "https://example.org/"]}, "output": {"contradiction_groups": [], "winner": None}},
+    "evidence_freshness": {"input": {"url": "https://example.com/"}, "output": {"fetched_at": "", "etag": None, "content_hash": ""}},
+    "evidence_receipt": {"input": {"url": "https://example.com/"}, "output": {"http_status": 200, "sha256": "", "body_stored": False}},
+    "url_preflight": {"input": {"url": "https://example.com/"}, "output": {"tls": {}, "headers": {}, "localhost_leaks": []}},
+    "url_security_headers": {"input": {"url": "https://example.com/"}, "output": {"present": [], "missing": []}},
+    "url_cors_check": {"input": {"url": "https://example.com/", "origin": "https://agent.example"}, "output": {"wildcard": False, "allow_origin": None}},
+    "url_tls_check": {"input": {"url": "https://example.com/"}, "output": {"tls_available": True, "hostname_match": True}},
+    "url_robots_audit": {"input": {"url": "https://example.com/"}, "output": {"robots": True, "llms_txt": False, "sitemap": False}},
+    "url_redirect_check": {"input": {"url": "https://example.com/"}, "output": {"hops": [], "final_url": "https://example.com/", "loops": False}},
+    "api_openapi_audit": {"input": {"url": "https://example.com/openapi.json"}, "output": {"operation_count": 0, "localhost_urls": [], "issues": []}},
+    "api_openapi_diff": {"input": {"old_url": "https://example.com/openapi.json", "new_url": "https://example.com/openapi.json"}, "output": {"removed_endpoints": [], "breaking": False}},
+    "api_schema_drift": {"input": {"live_url": "https://example.com/health", "method": "GET"}, "output": {"http_status": 200, "observed_shape": {}}},
+    "mcp_preflight": {"input": {"url": "https://example.com/mcp"}, "output": {"tools_list": [], "tools_executed": False}},
+    "x402_preflight": {"input": {"url": "https://example.com/paid"}, "output": {"http_status": 402, "payment_signature_sent": False}},
+}
+
+TASK_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("cors",), "url_cors_check", "CORS / Access-Control check"),
+    (("extract tables", "html table", "tables"), "web_tables", "Extract HTML tables"),
+    (("repair json", "malformed json", "fix json", "repair json"), "json_reliable", "Repair malformed JSON"),
+    (("validate x402", "x402 endpoint", "402 challenge", "payment-required"), "x402_preflight", "Validate unpaid x402 402"),
+    (("compare two urls", "compare two url", "compare urls", "compare two web"), "evidence_compare", "Compare two public URLs"),
+    (("openapi breaking", "breaking changes", "openapi diff", "removed endpoint"), "api_openapi_diff", "OpenAPI breaking-change diff"),
+)
+
 
 def merged(prod: dict[str, Any]) -> dict[str, Any]:
     extra = META.get(prod["id"]) or {}
@@ -233,24 +271,86 @@ def merged(prod: dict[str, Any]) -> dict[str, Any]:
 
 def catalog_item(prod: dict[str, Any]) -> dict[str, Any]:
     p = merged(prod)
+    io = EXAMPLE_IO.get(p["id"]) or {"input": {}, "output": {"ok": True}}
+    out_schema = p.get("output_schema") or {"type": "object", "description": p.get("output_summary") or "JSON object"}
     return {
         "product_id": p["id"],
         "name": p["name"],
         "category": p["category"],
         "endpoint": p["path"],
+        "path": p["path"],
         "method": "POST",
         "price_usdc": float(p["price_usdc"]),
+        "price": str(p["price_usdc"]),
         "price_atomic": int(p["price_atomic"]),
         "network": "eip155:8453",
         "asset": "USDC",
-        "description": p["description"],
+        "description": (p["description"] or "")[:DESC_LIMIT],
         "use_when": p.get("use_when") or p["purpose"],
         "output_summary": p.get("output_summary") or "",
         "keywords": list(p.get("keywords") or []),
         "input_schema": p.get("input_schema") or {"type": "object"},
+        "output_schema": out_schema,
+        "example_input": io.get("input") or {},
+        "example_output": io.get("output") or {"ok": True},
         "x402": True,
         "paid_enabled": product_paid_enabled(p),
     }
+
+
+def bazaar_info(prod: dict[str, Any]) -> dict[str, Any]:
+    item = catalog_item(prod)
+    return {
+        "bazaar": {
+            "info": {
+                "description": item["description"],
+                "category": item["category"],
+                "path": item["path"],
+                "method": "POST",
+                "network": item["network"],
+                "asset": item["asset"],
+                "price": item["price"],
+                "input": {
+                    "type": "http",
+                    "method": "POST",
+                    "discoverable": True,
+                    "bodyType": "json",
+                    "queryParams": {},
+                    "bodySchema": item["input_schema"],
+                },
+                "output": {
+                    "type": "json",
+                    "schema": item["output_schema"],
+                    "example": item["example_output"],
+                },
+            }
+        }
+    }
+
+
+def validate_bazaar_metadata() -> list[str]:
+    needed = (
+        "description",
+        "input_schema",
+        "output_schema",
+        "example_output",
+        "price",
+        "method",
+        "path",
+        "network",
+        "asset",
+        "category",
+    )
+    missing: list[str] = []
+    for p in PRODUCTS:
+        item = catalog_item(p)
+        for k in needed:
+            if item.get(k) in (None, "", [], {}):
+                missing.append(f"{p['id']}.{k}")
+        if len(str(item.get("description") or "")) > DESC_LIMIT:
+            missing.append(f"{p['id']}.description_too_long")
+        bazaar_info(p)
+    return missing
 
 
 def catalog_payload() -> dict[str, Any]:
@@ -262,19 +362,32 @@ def catalog_payload() -> dict[str, Any]:
         "asset": "USDC",
         "pay_per_call": True,
         "llm_required": False,
-        "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp", "/v1/catalog", "/v1/catalog/select"],
+        "free_routes": [
+            "/v1/json/inspect",
+            "/v1/json/validate",
+            "/v1/json/repair",
+            "/mcp",
+            "/v1/catalog",
+            "/v1/catalog/select",
+            "/skill.md",
+        ],
+        "catalog": "/v1/catalog",
+        "selector": "/v1/catalog/select",
+        "skill": "/skill.md",
         "product_count": len(items),
+        "bazaar_metadata_pass": not validate_bazaar_metadata(),
         "products": items,
     }
 
 
-def select_products(task: str, limit: int = 5) -> dict[str, Any]:
+def select_products(task: str, limit: int = 3) -> dict[str, Any]:
     raw = (task or "").strip()
     if not raw:
         raise ValueError("task_required")
     t = raw.lower()
     tokens = set(re.findall(r"[a-z0-9+]{3,}", t))
-    scored: list[tuple[int, str]] = []
+    scored: dict[str, int] = {}
+    reasons: dict[str, str] = {}
     for p in PRODUCTS:
         m = merged(p)
         score = 0
@@ -295,20 +408,47 @@ def select_products(task: str, limit: int = 5) -> dict[str, Any]:
         for tok in tokens:
             if tok in blob:
                 score += 1
-        if "malformed" in t and m["id"] == "json_reliable":
-            score += 12
-        if "compare" in t and "source" in t and m["id"] == "evidence_compare":
-            score += 12
-        if "x402" in t and m["id"] == "x402_preflight":
-            score += 12
-        if "table" in t and m["id"] == "web_tables":
-            score += 10
-        scored.append((score, m["id"]))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    ranked = [{"product_id": pid, "score": sc} for sc, pid in scored if sc > 0][: max(1, limit)]
-    if not ranked:
-        ranked = [{"product_id": scored[0][1], "score": 0}]
-    return {"task": raw, "matches": ranked, "top": ranked[0]["product_id"] if ranked else None, "llm_used": False}
+        scored[m["id"]] = score
+    for needles, pid, reason in TASK_RULES:
+        if any(n in t for n in needles):
+            scored[pid] = scored.get(pid, 0) + 24
+            reasons[pid] = reason
+    extra = (
+        (("malformed",), "json_reliable", "Repair malformed JSON"),
+        (("compare", "source"), "evidence_compare", "Compare public sources"),
+        (("x402",), "x402_preflight", "Validate unpaid x402 402"),
+        (("table",), "web_tables", "Extract HTML tables"),
+        (("cors",), "url_cors_check", "CORS check"),
+        (("openapi",), "api_openapi_diff", "OpenAPI diff"),
+    )
+    for needles, pid, reason in extra:
+        if all(n in t for n in needles) or (len(needles) == 1 and needles[0] in t):
+            scored[pid] = scored.get(pid, 0) + 10
+            reasons.setdefault(pid, reason)
+    ranked_ids = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))
+    if not any(sc > 0 for _, sc in ranked_ids):
+        ranked_ids = [("json_reliable", 0)]
+    top_n = [pid for pid, sc in ranked_ids if sc > 0][: max(1, limit)]
+    if not top_n:
+        top_n = [ranked_ids[0][0]]
+    matches = []
+    by_id = {p["id"]: p for p in PRODUCTS}
+    for pid in top_n:
+        item = catalog_item(by_id[pid])
+        matches.append(
+            {
+                "product_id": pid,
+                "name": item["name"],
+                "reason": reasons.get(pid) or item["use_when"],
+                "price": item["price"],
+                "price_usdc": item["price_usdc"],
+                "endpoint": item["endpoint"],
+                "method": "POST",
+                "input_example": item["example_input"],
+                "score": scored.get(pid, 0),
+            }
+        )
+    return {"task": raw, "matches": matches, "top": matches[0]["product_id"] if matches else None, "llm_used": False}
 
 
 def winner_tier(buyers: int, calls: int, repeats: int) -> str:
