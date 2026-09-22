@@ -1,0 +1,25 @@
+# Do not deploy until a Render (or other) account exists. Do not add a card unless required.
+# Custom domain is optional. Sleep after ~15 minutes idle is expected on Free.
+services:
+  - type: web
+    name: agent-json-reliability
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python serve.py
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PUBLIC_BETA_CONFIRM
+        value: "true"
+      - key: FREE_BETA
+        value: "true"
+      - key: X402_PAYMENT_ENABLED
+        value: "false"
+      - key: PAID_ROUTE_ENABLED
+        value: "false"
+      - key: MAINNET_PAYMENT_ENABLED
+        value: "false"
+      - key: PUBLIC_BASE_URL
+        sync: false
