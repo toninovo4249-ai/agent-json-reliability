@@ -41,10 +41,11 @@ def test_paid_flags_on_without_seller_is_503_not_free(monkeypatch, tmp_path):
     assert client.post("/v1/json/inspect", json={"text": '{"a":1}'}).status_code == 200
 
 
-def test_paid_flags_on_mainnet_without_cdp_secret_is_503(monkeypatch, tmp_path):
+def test_paid_flags_on_cdp_without_secret_is_503(monkeypatch, tmp_path):
     monkeypatch.setenv("X402_PAYMENT_ENABLED", "true")
     monkeypatch.setenv("PAID_ROUTE_ENABLED", "true")
     monkeypatch.setenv("MAINNET_PAYMENT_ENABLED", "true")
+    monkeypatch.setenv("X402_FACILITATOR", "cdp")
     monkeypatch.setenv("SELLER_RECEIVE_ADDRESS", "0x" + "11" * 20)
     monkeypatch.setenv("CDP_API_KEY_ID", "id-only")
     monkeypatch.delenv("CDP_API_KEY_SECRET", raising=False)
@@ -53,6 +54,23 @@ def test_paid_flags_on_mainnet_without_cdp_secret_is_503(monkeypatch, tmp_path):
     r = client.post("/v1/json/reliable", json={"text": '{"a":1,}'})
     assert r.status_code == 503
     assert "cdp_facilitator_auth_missing" in r.json()["blockers"]
+
+
+def test_payai_mainnet_without_cdp_is_402_not_503(monkeypatch, tmp_path):
+    monkeypatch.setenv("X402_PAYMENT_ENABLED", "true")
+    monkeypatch.setenv("PAID_ROUTE_ENABLED", "true")
+    monkeypatch.setenv("MAINNET_PAYMENT_ENABLED", "true")
+    monkeypatch.setenv("X402_FACILITATOR", "payai")
+    monkeypatch.setenv("SELLER_RECEIVE_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.delenv("CDP_API_KEY_ID", raising=False)
+    monkeypatch.delenv("CDP_API_KEY_SECRET", raising=False)
+    monkeypatch.setattr("products.beta.paid_ledger.PAID_LEDGER_PATH", tmp_path / "paid.sqlite")
+    client = TestClient(create_json_beta_app())
+    r = client.post("/v1/json/reliable", json={"text": '{"a":1,}'})
+    assert r.status_code == 402
+    assert r.json()["accepts"][0]["network"] == "eip155:8453"
+    assert r.json()["accepts"][0]["amount"] == "3000"
+    assert client.post("/v1/json/inspect", json={"text": '{"a":1}'}).status_code == 200
 
 
 def test_invalid_price_fail_closed(monkeypatch, tmp_path):

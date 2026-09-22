@@ -23,6 +23,8 @@ from products.beta.settings import (
 
 PAID_HTTP_PATHS = {"/v1/json/reliable"}
 FACILITATOR_CDP = "https://api.cdp.coinbase.com/platform/v2/x402"
+FACILITATOR_PAYAI = "https://facilitator.payai.network"
+FACILITATOR_DEXTER = "https://x402.dexter.cash"
 BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 REQUIRED_NETWORK = "eip155:8453"
@@ -61,13 +63,32 @@ def first_paid_buyer_mode() -> bool:
     return v in {"1", "true", "yes", "on"}
 
 
+def selected_facilitator() -> str:
+    """Production facilitator. auto = PayAI (no CDP signup) unless CDP JWT creds exist."""
+    choice = (os.environ.get("X402_FACILITATOR") or "auto").strip().lower()
+    if choice in {"payai", "dexter", "cdp"}:
+        return choice
+    if cdp_auth_configured():
+        return "cdp"
+    return "payai"
+
+
+def facilitator_base_url() -> str:
+    name = selected_facilitator()
+    if name == "dexter":
+        return FACILITATOR_DEXTER
+    if name == "cdp":
+        return FACILITATOR_CDP
+    return FACILITATOR_PAYAI
+
+
 def facilitator_mode() -> str:
     if not payment_flags_on():
         return "off"
     if allow_mock():
         return "mock"
     if mainnet_enabled():
-        return "cdp"
+        return selected_facilitator()
     return "blocked"
 
 
@@ -232,23 +253,26 @@ def _503(blockers: list[str]) -> JSONResponse:
 
 
 def _facilitator_post(kind: str, payload: dict[str, Any], requirements: dict[str, Any]) -> dict[str, Any]:
-    """Live CDP verify/settle. Never called when flags are off or mock mode. Never logs secrets."""
+    """Live verify/settle. Never called when flags are off or mock mode. Never logs secrets."""
     if kind not in {"verify", "settle"}:
         return {"ok": False, "error": "bad_kind"}
-    path = VERIFY_PATH if kind == "verify" else SETTLE_PATH
-    headers, err = auth_headers("POST", path)
-    if not headers:
-        return {"ok": False, "error": err or "cdp_jwt_missing", "is_real": False}
-    url = FACILITATOR_CDP.rstrip("/") + f"/{kind}"
+    name = selected_facilitator()
+    headers: dict[str, str] = {"Content-Type": "application/json", "User-Agent": "agent-json-reliability-x402"}
+    if name == "cdp":
+        path = VERIFY_PATH if kind == "verify" else SETTLE_PATH
+        auth, err = auth_headers("POST", path)
+        if not auth:
+            return {"ok": False, "error": err or "cdp_jwt_missing", "is_real": False}
+        headers.update(auth)
+    url = facilitator_base_url().rstrip("/") + f"/{kind}"
     body = json.dumps(
         {"x402Version": 2, "paymentPayload": payload, "paymentRequirements": requirements.get("accepts", [{}])[0]}
     ).encode()
-    headers = {**headers, "User-Agent": "agent-json-reliability-x402"}
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-        return {"ok": True, "data": data, "is_real": True}
+        return {"ok": True, "data": data, "is_real": True, "facilitator": facilitator_base_url()}
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": f"http_{e.code}", "is_real": False}
     except Exception as e:  # noqa: BLE001
@@ -257,12 +281,19 @@ def _facilitator_post(kind: str, payload: dict[str, Any], requirements: dict[str
 
 def probe_facilitator_supported() -> dict[str, Any]:
     """Safe reachability probe. No payment payload. Does not settle."""
-    url = FACILITATOR_CDP.rstrip("/") + "/supported"
+    base = facilitator_base_url()
+    url = base.rstrip("/") + "/supported"
     headers: dict[str, str] = {"User-Agent": "agent-json-reliability-x402-precheck"}
-    auth, err = auth_headers("GET", SUPPORTED_PATH) if cdp_auth_configured() else (None, "cdp_api_credentials_missing")
-    if auth:
-        headers.update(auth)
-        headers.pop("Content-Type", None)
+    authenticated = False
+    auth_err = None
+    if selected_facilitator() == "cdp" and cdp_auth_configured():
+        auth, err = auth_headers("GET", SUPPORTED_PATH)
+        if auth:
+            headers.update(auth)
+            headers.pop("Content-Type", None)
+            authenticated = True
+        else:
+            auth_err = err
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -270,18 +301,26 @@ def probe_facilitator_supported() -> dict[str, Any]:
         return {
             "reachable": True,
             "http_status": code,
-            "authenticated_probe": bool(auth),
-            "auth_error": None if auth else err,
+            "facilitator": base,
+            "authenticated_probe": authenticated,
+            "auth_error": auth_err,
         }
     except urllib.error.HTTPError as e:
         return {
             "reachable": e.code in {200, 400, 401, 403, 404, 405},
             "http_status": e.code,
-            "authenticated_probe": bool(auth),
-            "auth_error": None if e.code != 401 else "unauthorized",
+            "facilitator": base,
+            "authenticated_probe": authenticated,
+            "auth_error": "unauthorized" if e.code == 401 else auth_err,
         }
     except Exception as e:  # noqa: BLE001
-        return {"reachable": False, "http_status": None, "authenticated_probe": bool(auth), "auth_error": type(e).__name__}
+        return {
+            "reachable": False,
+            "http_status": None,
+            "facilitator": base,
+            "authenticated_probe": authenticated,
+            "auth_error": type(e).__name__,
+        }
 
 
 def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> dict[str, Any]:
@@ -315,7 +354,7 @@ def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> di
         "payment_hash": ph,
         "payer": payer,
         "nonce": nonce,
-        "facilitator": FACILITATOR_CDP,
+        "facilitator": facilitator_base_url(),
         "data": out.get("data"),
     }
 
@@ -342,7 +381,7 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
             "nonce": verified.get("nonce"),
             "verify_status": verified.get("verify_status"),
         }
-    if mode != "cdp" or payload is None:
+    if mode not in {"cdp", "payai", "dexter"} or payload is None:
         return {"settlement_status": "blocked_mainnet_flag_off", "tx_hash": None, "is_real": False}
     out = _facilitator_post("settle", payload, payment_requirements())
     if not out.get("ok") or not out.get("is_real"):
@@ -362,7 +401,7 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
         "payment_hash": verified.get("payment_hash"),
         "nonce": verified.get("nonce"),
         "verify_status": verified.get("verify_status"),
-        "facilitator": FACILITATOR_CDP,
+        "facilitator": facilitator_base_url(),
         "data": data,
     }
 
