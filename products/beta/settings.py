@@ -163,6 +163,10 @@ PUBLIC_PATHS = {
     "/v1/api/schema-drift",
     "/v1/mcp/preflight",
     "/v1/x402/preflight",
+    "/v1/catalog",
+    "/v1/catalog/select",
+    "/products",
+    "/.well-known/agent-products.json",
     "/mcp",
 }
 

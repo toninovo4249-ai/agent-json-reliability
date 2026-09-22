@@ -144,17 +144,19 @@ def agents_md() -> str:
 
 Agent JSON Reliability. llm_required=false. deterministic=true.
 
-Free: inspect, validate, repair, MCP.
+Free: inspect, validate, repair, MCP, GET /v1/catalog, POST /v1/catalog/select.
 Paid hosted reliability endpoint: POST {base}/v1/json/reliable (0.003 USDC per call via x402 on Base when payment is enabled).
 
 AI agents frequently emit malformed JSON. This API deterministically inspects, repairs and schema-validates JSON without another LLM call.
 
-1. GET {base}/.well-known/agent-services.json
-2. Prefer capability json_reliable / POST {base}/v1/json/reliable
-3. Send {{"text": "<json or malformed json>", "schema": {{optional JSON Schema}}}}
-4. Do not invent values if repaired=false
-5. {pay_note}
-6. Machine discovery: {base}/openapi.json {base}/.well-known/x402 {base}/.well-known/agent.json {base}/sitemap.xml {base}/llms.txt
+1. GET {base}/v1/catalog — list 24 paid products
+2. POST {base}/v1/catalog/select {{"task": "<what you need>"}} — deterministic router, no LLM
+3. GET {base}/.well-known/agent-services.json
+4. Prefer capability json_reliable / POST {base}/v1/json/reliable for malformed JSON
+5. Send {{"text": "<json or malformed json>", "schema": {{optional JSON Schema}}}}
+6. Do not invent values if repaired=false
+7. {pay_note}
+8. Machine discovery: {base}/openapi.json {base}/.well-known/x402 {base}/.well-known/agent-products.json {base}/sitemap.xml {base}/llms.txt
 
 Limits: body 262144 bytes, depth 64, 30 requests/minute/session.
 PyPI: uvx agent-json-reliability
@@ -178,7 +180,9 @@ def llms_txt() -> str:
         f"Primary: POST {base}/v1/json/reliable\n"
         "Capability: json_reliable\n"
         f"deterministic=true llm_required=false mixed_pricing={str(paid).lower()}\n"
-        f"Catalog: {base}/.well-known/agent-services.json\n"
+        f"Catalog: {base}/v1/catalog\n"
+        f"Select: POST {base}/v1/catalog/select {{\"task\":\"...\"}}\n"
+        f"Agent products: {base}/.well-known/agent-products.json\n"
         f"OpenAPI: {base}/openapi.json\n"
         f"x402: {base}/.well-known/x402\n"
         f"Agent card: {base}/.well-known/agent.json\n"
@@ -197,8 +201,11 @@ def llms_full_txt() -> str:
         llms_txt()
         + "\n# Free HTTP\n"
         "POST /v1/json/inspect POST /v1/json/validate POST /v1/json/repair POST /mcp\n"
+        "GET /v1/catalog POST /v1/catalog/select GET /.well-known/agent-products.json\n"
         "# Paid HTTP\n"
-        "POST /v1/json/reliable HTTP 402 then PAYMENT-SIGNATURE x402 exact 0.003 USDC Base USDC\n"
+        "24 x402 products in GET /v1/catalog and GET /openapi.json. "
+        "POST /v1/json/reliable 0.003 USDC. POST /v1/evidence/pack 0.0075 USDC.\n"
+        "# Router: POST /v1/catalog/select {\"task\":\"fix malformed JSON\"}\n"
         "# Do not invent JSON values when repaired=false\n"
     )
 
@@ -238,6 +245,8 @@ def discovery_get_paths() -> list[str]:
         "/.well-known/mcp/server-card.json",
         "/.well-known/x402",
         "/.well-known/agent.json",
+        "/.well-known/agent-products.json",
+        "/v1/catalog",
         "/capabilities",
     ]
 
@@ -292,6 +301,9 @@ def well_known_agent_json() -> dict:
         "homepage": base + "/",
         "openapi": base + "/openapi.json",
         "mcp": base + "/mcp",
+        "catalog": base + "/v1/catalog",
+        "catalog_select": base + "/v1/catalog/select",
+        "agent_products": base + "/.well-known/agent-products.json",
         "paid_endpoint": base + "/v1/json/reliable",
         "price_usdc": "0.003",
         "network": "eip155:8453",

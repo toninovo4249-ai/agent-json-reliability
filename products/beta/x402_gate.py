@@ -304,6 +304,9 @@ def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
         desc = (prod or {}).get("description") or "Deterministic agent utility."
         amount = amount_for_path(resource_path)
         price = price_usdc_for_path(resource_path)
+        from products.beta.store_catalog import META
+
+        body_schema = (META.get((prod or {}).get("id") or "") or {}).get("input_schema") or {"type": "object"}
         ext = {
             "bazaar": {
                 "info": {
@@ -311,7 +314,7 @@ def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
                         "type": "http",
                         "method": "POST",
                         "bodyType": "json",
-                        "bodySchema": {"type": "object"},
+                        "bodySchema": body_schema,
                     },
                     "output": {"example": {"ok": True}},
                 }

@@ -65,6 +65,7 @@ from products.beta.acquisition import acquisition_metrics
 from products.beta.cdp_jwt import cdp_auth_configured
 from products.beta.paid_ledger import record_paid_call, record_product_event, split_paid_metrics
 from products.beta.product_registry import PRODUCTS, active_paid_products, product_by_path
+from products.beta.store_catalog import META, catalog_payload, select_products
 from products.agent_utility.handlers import run_product
 from products.beta.store import record_v16
 from products.beta.x402_gate import (
@@ -98,12 +99,13 @@ ALLOWED_PREFIX = (
     "/v1/api/",
     "/v1/mcp/",
     "/v1/x402/",
+    "/v1/catalog",
     "/.well-known/",
 )
 
 
 def _tool_path(path: str) -> bool:
-    return path.startswith(("/v1/json", "/v1/evidence", "/v1/web", "/v1/url", "/v1/api", "/v1/mcp/", "/v1/x402"))
+    return path.startswith(("/v1/json", "/v1/evidence", "/v1/web", "/v1/url", "/v1/api", "/v1/mcp/", "/v1/x402", "/v1/catalog"))
 
 
 class BetaMiddleware(BaseHTTPMiddleware):
@@ -193,6 +195,9 @@ class BetaMiddleware(BaseHTTPMiddleware):
             "/sitemap.xml",
             "/.well-known/x402",
             "/.well-known/agent.json",
+            "/.well-known/agent-products.json",
+            "/v1/catalog",
+            "/products",
             "/mcp",
         } else None
         probe = None
@@ -496,6 +501,11 @@ def create_json_beta_app() -> FastAPI:
                         "Unpaid requests return HTTP 402. Payment is verified before outbound fetch."
                     )
                     op["x-payment-info"] = _x_payment_info(path)
+                    schema_in = (META.get(prod["id"]) or {}).get("input_schema") or {"type": "object"}
+                    op["requestBody"] = {
+                        "required": True,
+                        "content": {"application/json": {"schema": schema_in}},
+                    }
                     responses = op.setdefault("responses", {})
                     responses["200"] = {"description": f"{prod['name']} after payment"}
                     responses["402"] = {"description": "Payment Required"}
@@ -546,7 +556,14 @@ def create_json_beta_app() -> FastAPI:
             "primary_capability": "json_reliable",
             "paid_route": "/v1/json/reliable" if payment_flags_on() else None,
             "paid_routes": [p["path"] for p in active_paid_products()],
-            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp"],
+            "free_routes": [
+                "/v1/json/inspect",
+                "/v1/json/validate",
+                "/v1/json/repair",
+                "/mcp",
+                "/v1/catalog",
+                "/v1/catalog/select",
+            ],
             "tools": [s["tool_name"] for s in public_catalog()["services"]],
             "html_exposed": ENABLE_HTML_BETA,
         }
@@ -554,6 +571,27 @@ def create_json_beta_app() -> FastAPI:
     @app.get("/.well-known/agent-services.json")
     def manifest():
         return public_catalog()
+
+    @app.get("/v1/catalog")
+    def catalog_get():
+        return catalog_payload()
+
+    @app.get("/products")
+    def products_get():
+        return catalog_payload()
+
+    @app.get("/.well-known/agent-products.json")
+    def agent_products():
+        return catalog_payload()
+
+    @app.post("/v1/catalog/select")
+    async def catalog_select(request: Request):
+        body = _read(request)
+        task = str(body.get("task") or "")
+        try:
+            return select_products(task)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.get("/.well-known/x402")
     def well_known_x402():
