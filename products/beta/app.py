@@ -38,6 +38,7 @@ from products.beta.settings import (
     MAX_REQUESTS_PER_MINUTE_PER_SESSION,
     MAX_SCHEMA_DEPTH,
     MAX_STRING_CHARS,
+    MAINNET_PAYMENT_ENABLED,
     PAID_PRICE_USDC,
     PAID_ROUTE_ENABLED,
     PAYMENT_REQUIRED,
@@ -48,13 +49,15 @@ from products.beta.settings import (
     current_base_url,
     public_exposure_mode,
 )
-from products.beta.paid_ledger import record_paid_call
+from products.beta.cdp_jwt import cdp_auth_configured
+from products.beta.paid_ledger import paid_metrics, record_paid_call
 from products.beta.store import record_v16
 from products.beta.x402_gate import (
     encode_payment_response,
     maybe_payment_response,
     payment_flags_on,
     settle_payment,
+    valid_seller_receive_address,
 )
 from products.gateway.mcp_server import handle_rpc, mcp_server_card
 from products.gateway.rate_limit import RateLimiter
@@ -261,7 +264,11 @@ def create_json_beta_app() -> FastAPI:
             "X402_PAYMENT_ENABLED": X402_PAYMENT_ENABLED,
             "PAID_ROUTE_ENABLED": PAID_ROUTE_ENABLED,
             "FIRST_PAID_BUYER_MODE": FIRST_PAID_BUYER_MODE,
+            "MAINNET_PAYMENT_ENABLED": MAINNET_PAYMENT_ENABLED,
             "x402_middleware_present": True,
+            "seller_receive_configured": valid_seller_receive_address(),
+            "cdp_auth_configured": cdp_auth_configured(),
+            **paid_metrics(),
         }
 
     @app.get("/ready")
@@ -347,6 +354,7 @@ def create_json_beta_app() -> FastAPI:
                         "network": X402_NETWORK,
                         "asset": "USDC",
                         "price": str(PAID_PRICE_USDC),
+                        "usd_price": str(PAID_PRICE_USDC),
                         "tx_hash": None,
                         "settlement_status": "unpaid_402" if blocked.status_code == 402 else "misconfigured",
                         "response_status": blocked.status_code,
@@ -371,10 +379,13 @@ def create_json_beta_app() -> FastAPI:
                     "network": receipt.get("network") or X402_NETWORK,
                     "asset": receipt.get("asset") or "USDC",
                     "price": receipt.get("price") or str(PAID_PRICE_USDC),
+                    "usd_price": receipt.get("price") or str(PAID_PRICE_USDC),
                     "amount_atomic": receipt.get("amount"),
+                    "payTo": receipt.get("payTo"),
                     "tx_hash": receipt.get("tx_hash"),
                     "payment_hash": receipt.get("payment_hash"),
                     "nonce": receipt.get("nonce"),
+                    "verify_status": receipt.get("verify_status"),
                     "settlement_status": receipt.get("settlement_status"),
                     "response_status": 200 if receipt.get("settlement_status") in {"settled", "mock_settled"} else 402,
                     "processing_ms": (time.perf_counter() - tpay) * 1000,

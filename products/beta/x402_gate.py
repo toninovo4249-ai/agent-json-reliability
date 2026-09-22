@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -12,6 +13,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from products.beta import paid_ledger
+from products.beta.cdp_jwt import SETTLE_PATH, SUPPORTED_PATH, VERIFY_PATH, auth_headers, cdp_auth_configured
 from products.beta.settings import (
     PAID_PRICE_USDC,
     X402_NETWORK,
@@ -21,9 +23,12 @@ from products.beta.settings import (
 
 PAID_HTTP_PATHS = {"/v1/json/reliable"}
 FACILITATOR_CDP = "https://api.cdp.coinbase.com/platform/v2/x402"
-FACILITATOR_PAYAI = "https://facilitator.payai.network"
-FACILITATOR_TESTNET = "https://x402.org/facilitator"
 BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+REQUIRED_NETWORK = "eip155:8453"
+REQUIRED_ATOMIC = "3000"
+MAX_PAID_REQUESTS_BEFORE_REVIEW = 10
+MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW = 5
 
 
 def _env_flag(name: str) -> bool:
@@ -38,12 +43,22 @@ def seller_receive_address() -> str:
     return (os.environ.get("SELLER_RECEIVE_ADDRESS") or "").strip()
 
 
+def valid_seller_receive_address(addr: str | None = None) -> bool:
+    a = (addr if addr is not None else seller_receive_address()).strip()
+    return bool(EVM_ADDRESS_RE.fullmatch(a))
+
+
 def mainnet_enabled() -> bool:
     return _env_flag("MAINNET_PAYMENT_ENABLED")
 
 
 def allow_mock() -> bool:
     return _env_flag("ALLOW_MOCK_X402") and not mainnet_enabled()
+
+
+def first_paid_buyer_mode() -> bool:
+    v = (os.environ.get("FIRST_PAID_BUYER_MODE") or "true").strip().lower()
+    return v in {"1", "true", "yes", "on"}
 
 
 def facilitator_mode() -> str:
@@ -57,7 +72,46 @@ def facilitator_mode() -> str:
 
 
 def atomic_amount() -> str:
+    raw = (os.environ.get("X402_PRICE_ATOMIC") or "").strip()
+    if raw:
+        try:
+            return str(int(raw))
+        except ValueError:
+            return "INVALID"
     return str(int(round(float(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC) * 1_000_000)))
+
+
+def configured_network() -> str:
+    return (os.environ.get("X402_NETWORK") or X402_NETWORK or REQUIRED_NETWORK).strip()
+
+
+def configured_asset() -> str:
+    return (os.environ.get("X402_USDC_BASE") or X402_USDC_BASE or BASE_USDC).strip()
+
+
+def paid_route_blockers() -> list[str]:
+    """Fail-closed reasons for the paid route. Empty means config is internally consistent."""
+    errs: list[str] = []
+    if not valid_seller_receive_address():
+        errs.append("seller_receive_address_invalid_or_missing")
+    if configured_network() != REQUIRED_NETWORK:
+        errs.append("invalid_network")
+    if configured_asset().lower() != BASE_USDC.lower():
+        errs.append("invalid_asset")
+    if atomic_amount() != REQUIRED_ATOMIC:
+        errs.append("invalid_price")
+    if first_paid_buyer_mode():
+        m = paid_ledger.paid_metrics()
+        if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_PAID_REQUESTS_BEFORE_REVIEW:
+            errs.append("first_paid_buyer_max_requests")
+        if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW:
+            errs.append("first_paid_buyer_max_buyers")
+    mode = facilitator_mode()
+    if mode == "blocked":
+        errs.append("mainnet_payment_disabled")
+    if mode == "cdp" and not cdp_auth_configured():
+        errs.append("cdp_facilitator_auth_missing")
+    return errs
 
 
 def bazaar_extensions() -> dict[str, Any]:
@@ -95,6 +149,7 @@ def bazaar_extensions() -> dict[str, Any]:
 def payment_requirements(resource_path: str = "/v1/json/reliable") -> dict[str, Any]:
     url = current_base_url().rstrip("/") + resource_path
     price = os.environ.get("PAID_PRICE_USDC") or str(PAID_PRICE_USDC)
+    pay_to = seller_receive_address() if valid_seller_receive_address() else ""
     return {
         "x402Version": 2,
         "error": "PAYMENT-SIGNATURE header is required",
@@ -106,10 +161,10 @@ def payment_requirements(resource_path: str = "/v1/json/reliable") -> dict[str, 
         "accepts": [
             {
                 "scheme": "exact",
-                "network": os.environ.get("X402_NETWORK") or X402_NETWORK,
+                "network": configured_network(),
                 "amount": atomic_amount(),
-                "asset": os.environ.get("X402_USDC_BASE") or X402_USDC_BASE or BASE_USDC,
-                "payTo": seller_receive_address() or "SELLER_RECEIVE_ADDRESS_UNSET",
+                "asset": configured_asset(),
+                "payTo": pay_to,
                 "maxTimeoutSeconds": 60,
                 "extra": {"name": "USDC", "version": "2"},
             }
@@ -128,17 +183,15 @@ def decode_payment_signature(header: str | None) -> dict[str, Any] | None:
     if not header or not str(header).strip():
         return None
     s = str(header).strip()
-    for candidate in (s,):
-        try:
-            raw = base64.b64decode(candidate, validate=False)
-            return json.loads(raw.decode("utf-8"))
-        except Exception:
-            pass
-        try:
-            return json.loads(s)
-        except Exception:
-            return None
-    return None
+    try:
+        raw = base64.b64decode(s, validate=False)
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        pass
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
 
 
 def payment_hash(payload: dict[str, Any] | None, raw_header: str | None) -> str:
@@ -165,32 +218,70 @@ def _402(path: str) -> JSONResponse:
     return JSONResponse(req, status_code=402, headers={"PAYMENT-REQUIRED": encode_payment_required(req)})
 
 
+def _503(blockers: list[str]) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "payment_misconfigured",
+            "error_class": "paid_route_unavailable",
+            "paid_route": "/v1/json/reliable",
+            "blockers": blockers,
+            "free_routes_operational": True,
+        },
+        status_code=503,
+    )
+
+
 def _facilitator_post(kind: str, payload: dict[str, Any], requirements: dict[str, Any]) -> dict[str, Any]:
-    """Live CDP verify/settle. Never called when flags are off or mock mode."""
+    """Live CDP verify/settle. Never called when flags are off or mock mode. Never logs secrets."""
     if kind not in {"verify", "settle"}:
         return {"ok": False, "error": "bad_kind"}
-    key_id = (os.environ.get("CDP_API_KEY_ID") or "").strip()
-    if not key_id:
-        return {"ok": False, "error": "cdp_api_key_missing", "is_real": False}
+    path = VERIFY_PATH if kind == "verify" else SETTLE_PATH
+    headers, err = auth_headers("POST", path)
+    if not headers:
+        return {"ok": False, "error": err or "cdp_jwt_missing", "is_real": False}
     url = FACILITATOR_CDP.rstrip("/") + f"/{kind}"
     body = json.dumps(
         {"x402Version": 2, "paymentPayload": payload, "paymentRequirements": requirements.get("accepts", [{}])[0]}
     ).encode()
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json", "User-Agent": "agent-json-reliability-x402"},
-        method="POST",
-    )
+    headers = {**headers, "User-Agent": "agent-json-reliability-x402"}
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
         return {"ok": True, "data": data, "is_real": True}
     except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace") if e.fp else str(e)
-        return {"ok": False, "error": f"http_{e.code}", "body": raw[:500], "is_real": False}
+        return {"ok": False, "error": f"http_{e.code}", "is_real": False}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)[:200], "is_real": False}
+        return {"ok": False, "error": type(e).__name__, "is_real": False}
+
+
+def probe_facilitator_supported() -> dict[str, Any]:
+    """Safe reachability probe. No payment payload. Does not settle."""
+    url = FACILITATOR_CDP.rstrip("/") + "/supported"
+    headers: dict[str, str] = {"User-Agent": "agent-json-reliability-x402-precheck"}
+    auth, err = auth_headers("GET", SUPPORTED_PATH) if cdp_auth_configured() else (None, "cdp_api_credentials_missing")
+    if auth:
+        headers.update(auth)
+        headers.pop("Content-Type", None)
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            code = int(resp.status)
+        return {
+            "reachable": True,
+            "http_status": code,
+            "authenticated_probe": bool(auth),
+            "auth_error": None if auth else err,
+        }
+    except urllib.error.HTTPError as e:
+        return {
+            "reachable": e.code in {200, 400, 401, 403, 404, 405},
+            "http_status": e.code,
+            "authenticated_probe": bool(auth),
+            "auth_error": None if e.code != 401 else "unauthorized",
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"reachable": False, "http_status": None, "authenticated_probe": bool(auth), "auth_error": type(e).__name__}
 
 
 def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> dict[str, Any]:
@@ -236,20 +327,21 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
     if verified.get("verify_status") == "replay_rejected":
         return {"settlement_status": "replay_rejected", "tx_hash": None, "is_real": False}
     if mode == "mock":
-        receipt = {
+        return {
             "settlement_status": "mock_settled",
             "tx_hash": None,
             "is_real": False,
             "payer": verified.get("payer"),
-            "network": os.environ.get("X402_NETWORK") or X402_NETWORK,
+            "payTo": seller_receive_address(),
+            "network": configured_network(),
             "asset": "USDC",
             "amount": atomic_amount(),
             "price": str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC),
             "note": "MOCK_NOT_REAL_SETTLEMENT",
             "payment_hash": verified.get("payment_hash"),
             "nonce": verified.get("nonce"),
+            "verify_status": verified.get("verify_status"),
         }
-        return receipt
     if mode != "cdp" or payload is None:
         return {"settlement_status": "blocked_mainnet_flag_off", "tx_hash": None, "is_real": False}
     out = _facilitator_post("settle", payload, payment_requirements())
@@ -262,12 +354,14 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
         "tx_hash": tx,
         "is_real": True,
         "payer": verified.get("payer"),
-        "network": os.environ.get("X402_NETWORK") or X402_NETWORK,
+        "payTo": seller_receive_address(),
+        "network": configured_network(),
         "asset": "USDC",
         "amount": atomic_amount(),
         "price": str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC),
         "payment_hash": verified.get("payment_hash"),
         "nonce": verified.get("nonce"),
+        "verify_status": verified.get("verify_status"),
         "facilitator": FACILITATOR_CDP,
         "data": data,
     }
@@ -284,11 +378,9 @@ def maybe_payment_response(request: Request, path: str) -> JSONResponse | None:
         return None
     if not payment_flags_on():
         return None
-    if not seller_receive_address() and facilitator_mode() != "mock":
-        return JSONResponse(
-            {"error": "payment_misconfigured", "error_class": "seller_receive_address_required"},
-            status_code=503,
-        )
+    blockers = paid_route_blockers()
+    if blockers:
+        return _503(blockers)
     raw = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
     payload = decode_payment_signature(raw)
     verified = verify_payment(payload, raw)

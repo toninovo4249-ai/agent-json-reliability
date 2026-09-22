@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from products.beta.paid_ledger import paid_metrics
 from products.beta.settings import current_base_url, is_https_public
 from products.gateway.manifest import tools
 
@@ -16,6 +17,7 @@ def _json_tools():
 
 def public_catalog() -> dict:
     base = current_base_url()
+    real_paid = int(paid_metrics().get("REAL_PAID_CALLS") or 0)
     ts = []
     for t in _json_tools():
         rec = dict(t)
@@ -48,7 +50,9 @@ def public_catalog() -> dict:
         "x402_payments": False,
         "X402_PAYMENT_ENABLED": False,
         "PAID_ROUTE_ENABLED": False,
-        "BAZAAR_ELIGIBLE": False,
+        "BAZAAR_ELIGIBLE": real_paid >= 1,
+        "CIRCLE_DISCOVERY_ELIGIBLE": real_paid >= 1,
+        "REAL_PAID_CALLS": real_paid,
         "limits": {
             "MAX_REQUEST_BODY_BYTES": 262144,
             "MAX_JSON_DEPTH": 64,

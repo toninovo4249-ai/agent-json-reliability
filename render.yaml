@@ -25,5 +25,17 @@ services:
         value: "true"
       - key: SELLER_SPEND_ALLOWED
         value: "false"
+      - key: X402_NETWORK
+        value: "eip155:8453"
+      - key: X402_PRICE_ATOMIC
+        value: "3000"
+      - key: X402_USDC_BASE
+        value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      - key: SELLER_RECEIVE_ADDRESS
+        sync: false
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
       - key: PUBLIC_BASE_URL
         sync: false

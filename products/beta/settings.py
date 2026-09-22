@@ -4,8 +4,7 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BETA_VERSION = "0.1.0"
-STATUS = "BETA"
+BETA_VERSION = "0.16.1"
 
 
 def _b(name: str, default: bool = False) -> bool:
@@ -57,11 +56,17 @@ SELLER_RECEIVE_ADDRESS = (os.environ.get("SELLER_RECEIVE_ADDRESS") or "").strip(
 X402_NETWORK = (os.environ.get("X402_NETWORK") or "eip155:8453").strip()
 X402_USDC_BASE = (os.environ.get("X402_USDC_BASE") or "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").strip()
 try:
+    X402_PRICE_ATOMIC = int(os.environ.get("X402_PRICE_ATOMIC") or "3000")
+except ValueError:
+    X402_PRICE_ATOMIC = 3000
+try:
     PAID_PRICE_USDC = float(os.environ.get("PAID_PRICE_USDC") or "0.003")
 except ValueError:
     PAID_PRICE_USDC = 0.003
+MAX_PAID_REQUESTS_BEFORE_REVIEW = _i("MAX_PAID_REQUESTS_BEFORE_REVIEW", 10)
+MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW = _i("MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW", 5)
 PAID_LEDGER_PATH = Path(os.environ.get("PAID_LEDGER_PATH") or str(ROOT / "data" / "paid_ledger.sqlite"))
-ENABLE_HTML_BETA = False
+ENABLE_HTML_BETA = _b("ENABLE_HTML_BETA", False)
 BATCH_PUBLIC = _b("BATCH_PUBLIC", False)
 MAX_REQUEST_BODY_BYTES = _i("MAX_REQUEST_BODY_BYTES", 262144)
 MAX_JSON_DEPTH = _i("MAX_JSON_DEPTH", 64)
@@ -75,12 +80,12 @@ MAX_STRING_CHARS = _i("MAX_STRING_CHARS", 100000)
 MAX_NODES = _i("MAX_JSON_NODES", 20000)
 MAX_BATCH = _i("MAX_BATCH", 20)
 PUBLIC_BASE_URL = current_base_url()
-INTERNAL_UA = "agent-json-reliability-internal"
-INTERNAL_HEADER = "x-ajr-internal"
-PUBLIC_CHECK_HEADER = "x-ajr-public-check"
+INTERNAL_UA = "x402-hunter-internal"
+INTERNAL_HEADER = "x-hunter-internal"
+PUBLIC_CHECK_HEADER = "x-hunter-public-check"
 SYNTHETIC_HEADER = "x-synthetic-buyer"
-DB_PATH = Path(os.environ.get("TELEMETRY_DB") or str(ROOT / "data" / "local_telemetry.sqlite"))
-SECRET_DIR = Path(os.environ.get("SECRET_DIR") or str(ROOT / "data" / "secrets"))
+DB_PATH = ROOT / "data" / "v16_free_beta.sqlite"
+SECRET_DIR = ROOT / "data" / "v16_secrets"
 
 PUBLIC_PATHS = {
     "/",
