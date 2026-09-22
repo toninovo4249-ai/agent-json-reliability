@@ -19,7 +19,7 @@ from products.agent_json_reliability.validate import validate_json
 from products.beta.batch import reliable_batch
 from products.beta.catalog import public_catalog
 from products.beta.identity import client_hash, traffic_kind, ua_coarse
-from products.beta.landing import agents_md, landing_html, llms_txt, robots_txt
+from products.beta.landing import OPENAPI_DESCRIPTION, agents_md, landing_html, llms_txt, robots_txt
 from products.beta.security import schema_limits, walk_limits
 from products.beta.selfcheck import ready_selfcheck
 from products.beta.settings import (
@@ -120,8 +120,17 @@ class BetaMiddleware(BaseHTTPMiddleware):
         request.state.body = body
         request.state.traffic_kind = kind
         request.state.client_hash = ch
+        resp = None
         try:
-            resp = await call_next(request)
+            # Unpaid paid-route probes must 402 before FastAPI body/schema validation.
+            if path == "/v1/json/reliable":
+                sig = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
+                if not sig:
+                    pay_block = maybe_payment_response(request, "/v1/json/reliable")
+                    if pay_block is not None:
+                        resp = pay_block
+            if resp is None:
+                resp = await call_next(request)
         finally:
             if path.startswith("/v1/json"):
                 try:
@@ -220,9 +229,9 @@ def create_json_beta_app() -> FastAPI:
     limiter = RateLimiter(per_minute=MAX_REQUESTS_PER_MINUTE_PER_SESSION, burst=max(5, MAX_REQUESTS_PER_MINUTE_PER_SESSION // 3))
     sem = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
     app = FastAPI(
-        title="Agent JSON Reliability free beta",
+        title="Agent JSON Reliability",
         version=BETA_VERSION,
-        description="FREE BETA. NO PAYMENT REQUIRED. Not a paid x402 endpoint.",
+        description=OPENAPI_DESCRIPTION,
         servers=[{"url": current_base_url(), "description": "PUBLIC_BASE_URL"}],
         docs_url=None,
         redoc_url=None,
@@ -239,9 +248,66 @@ def create_json_beta_app() -> FastAPI:
             routes=app.routes,
         )
         schema["servers"] = [{"url": current_base_url(), "description": "PUBLIC_BASE_URL"}]
-        schema["info"]["x-free-beta"] = True
-        schema["info"]["x-payment-required"] = False
+        paid = payment_flags_on()
+        schema["info"]["description"] = OPENAPI_DESCRIPTION
         schema["info"]["x-llm-required"] = False
+        schema["info"]["x-payment-required"] = False
+        schema["info"]["x-x402-paid-path"] = "/v1/json/reliable" if paid else None
+        schema["info"]["x-free-routes"] = [
+            "GET /",
+            "GET /health",
+            "GET /ready",
+            "GET /capabilities",
+            "GET /.well-known/agent-services.json",
+            "GET /.well-known/mcp/server-card.json",
+            "GET /robots.txt",
+            "GET /llms.txt",
+            "GET /AGENTS.md",
+            "POST /mcp",
+            "POST /v1/json/inspect",
+            "POST /v1/json/validate",
+            "POST /v1/json/repair",
+        ]
+        schema["security"] = []
+        comps = schema.setdefault("components", {})
+        schemes = comps.setdefault("securitySchemes", {})
+        schemes["x402PaymentSignature"] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": "PAYMENT-SIGNATURE",
+            "description": "x402 v2 PAYMENT-SIGNATURE. Required only for POST /v1/json/reliable.",
+        }
+        paths = schema.setdefault("paths", {})
+        if not BATCH_PUBLIC:
+            paths.pop("/v1/json/reliable/batch", None)
+        for path, item in list(paths.items()):
+            if not isinstance(item, dict):
+                continue
+            for method, op in item.items():
+                if method not in {"get", "put", "post", "delete", "patch", "options", "head"}:
+                    continue
+                if not isinstance(op, dict):
+                    continue
+                paid_op = paid and path == "/v1/json/reliable" and method == "post"
+                if paid_op:
+                    op["security"] = [{"x402PaymentSignature": []}]
+                    op["x-payment-required"] = True
+                    op["x-x402"] = {
+                        "scheme": "exact",
+                        "network": "eip155:8453",
+                        "asset": "USDC",
+                        "amount": "3000",
+                        "priceUsdc": "0.003",
+                        "facilitator": "PayAI",
+                    }
+                    op["summary"] = "Paid x402 JSON reliability"
+                    op["description"] = (
+                        "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. "
+                        "0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free."
+                    )
+                else:
+                    op["security"] = []
+                    op["x-payment-required"] = False
         return schema
 
     app.openapi = custom_openapi
@@ -285,6 +351,8 @@ def create_json_beta_app() -> FastAPI:
             "PAYMENT_REQUIRED": False,
             "primary": "/v1/json/reliable",
             "primary_capability": "json_reliable",
+            "paid_route": "/v1/json/reliable" if payment_flags_on() else None,
+            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp"],
             "tools": [s["tool_name"] for s in public_catalog()["services"]],
             "html_exposed": ENABLE_HTML_BETA,
         }
@@ -407,7 +475,7 @@ def create_json_beta_app() -> FastAPI:
             )
         return result
 
-    @app.post("/v1/json/reliable/batch")
+    @app.post("/v1/json/reliable/batch", include_in_schema=bool(BATCH_PUBLIC))
     async def batch(request: Request):
         if not BATCH_PUBLIC:
             raise HTTPException(404, "batch_disabled_on_public_beta")

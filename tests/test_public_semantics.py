@@ -31,3 +31,30 @@ def test_local_http_mcp_parity():
     ref = reliable_json(REFUSAL, None)
     assert ref["valid_final"] is False
     assert ref["unsafe_or_ambiguous"] is True or ref["repaired"] is False
+
+
+def test_openapi_marks_free_routes_and_hides_disabled_batch():
+    client = TestClient(create_json_beta_app())
+    spec = client.get("/openapi.json").json()
+    desc = spec["info"]["description"]
+    assert "FREE BETA. NO PAYMENT REQUIRED. Not a paid x402 endpoint." not in desc
+    assert "POST /v1/json/reliable" in desc
+    assert spec["security"] == []
+    assert spec["info"].get("contact") is None
+    for path in (
+        "/health",
+        "/v1/json/inspect",
+        "/v1/json/validate",
+        "/v1/json/repair",
+        "/mcp",
+    ):
+        methods = spec["paths"][path]
+        for op in methods.values():
+            if isinstance(op, dict) and "security" in op:
+                assert op["security"] == []
+                assert op.get("x-payment-required") is False
+    assert "/v1/json/reliable/batch" not in spec["paths"]
+    landing = client.get("/").text
+    assert "FREE BETA. NO PAYMENT REQUIRED. Not a paid x402 endpoint." not in landing
+    assert "Free:" in landing
+

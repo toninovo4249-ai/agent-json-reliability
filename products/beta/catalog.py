@@ -52,8 +52,8 @@ def public_catalog() -> dict:
     return {
         "version": "0.16.1",
         "name": "Agent JSON Reliability",
-        "free_beta": True,
-        "FREE_BETA": True,
+        "free_beta": not paid,
+        "FREE_BETA": not paid,
         "payment_required": paid,
         "PAYMENT_REQUIRED": paid,
         "deterministic": True,
