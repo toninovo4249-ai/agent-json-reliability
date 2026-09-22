@@ -139,10 +139,12 @@ Remote HTTP MCP (`POST /mcp`) is for a running instance.
 
 ## Machine discovery
 
+- Hosted origin: https://agent-json-reliability.onrender.com
 - `GET /.well-known/agent-services.json`
+- `GET /.well-known/agent.json`
+- `GET /.well-known/x402`
 - `GET /openapi.json`
-- `GET /llms.txt`
-- `GET /AGENTS.md`
+- `GET /llms.txt` · `GET /llms-full.txt` · `GET /AGENTS.md` · `GET /sitemap.xml` · `GET /robots.txt`
 - `POST /mcp` JSON-RPC (`tools/list`, `tools/call`)
 
 ## What this package does not include

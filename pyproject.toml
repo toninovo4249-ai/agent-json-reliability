@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Agent JSON Reliability contributors"}]
-keywords = ["json", "json-schema", "json-repair", "ai-agents", "mcp", "structured-output"]
+keywords = ["json", "json-schema", "json-repair", "ai-agents", "mcp", "structured-output", "x402", "fastapi", "developer-tools"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: MIT License",

@@ -19,7 +19,17 @@ from products.agent_json_reliability.validate import validate_json
 from products.beta.batch import reliable_batch
 from products.beta.catalog import public_catalog
 from products.beta.identity import client_hash, traffic_kind, ua_coarse
-from products.beta.landing import OPENAPI_DESCRIPTION, agents_md, landing_html, llms_txt, robots_txt
+from products.beta.landing import (
+    INDEXNOW_KEY,
+    OPENAPI_DESCRIPTION,
+    agents_md,
+    landing_html,
+    llms_full_txt,
+    llms_txt,
+    robots_txt,
+    sitemap_xml,
+    well_known_agent_json,
+)
 from products.beta.security import schema_limits, walk_limits
 from products.beta.selfcheck import ready_selfcheck
 from products.beta.settings import (
@@ -153,8 +163,12 @@ class BetaMiddleware(BaseHTTPMiddleware):
             "/health",
             "/ready",
             "/llms.txt",
+            "/llms-full.txt",
             "/AGENTS.md",
             "/robots.txt",
+            "/sitemap.xml",
+            "/.well-known/x402",
+            "/.well-known/agent.json",
             "/mcp",
         } else None
         probe = None
@@ -259,6 +273,10 @@ def create_json_beta_app() -> FastAPI:
         server = discovery_server_url()
         schema["servers"] = [{"url": server, "description": "Public origin"}]
         schema["info"]["description"] = OPENAPI_DESCRIPTION
+        schema["info"]["contact"] = {
+            "url": "https://github.com/toninovo4249-ai/agent-json-reliability",
+        }
+        schema["info"]["license"] = {"name": "MIT"}
         schema["info"]["x-llm-required"] = False
         schema["info"]["x-guidance"] = (
             "Free routes: GET /health, POST /v1/json/inspect, POST /v1/json/validate, "
@@ -407,6 +425,10 @@ def create_json_beta_app() -> FastAPI:
             "instructions": "POST /v1/json/reliable is the paid x402 resource. inspect/validate/repair and MCP are free.",
         }
 
+    @app.get("/.well-known/agent.json")
+    def well_known_agent():
+        return well_known_agent_json()
+
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():
         return robots_txt()
@@ -415,9 +437,21 @@ def create_json_beta_app() -> FastAPI:
     def llms():
         return llms_txt()
 
+    @app.get("/llms-full.txt", response_class=PlainTextResponse)
+    def llms_full():
+        return llms_full_txt()
+
     @app.get("/AGENTS.md", response_class=PlainTextResponse)
     def agents():
         return agents_md()
+
+    @app.get("/sitemap.xml", response_class=PlainTextResponse)
+    def sitemap():
+        return PlainTextResponse(sitemap_xml(), media_type="application/xml")
+
+    @app.get(f"/{INDEXNOW_KEY}.txt", response_class=PlainTextResponse)
+    def indexnow_key():
+        return INDEXNOW_KEY
 
     @app.post("/mcp")
     async def mcp(request: Request):

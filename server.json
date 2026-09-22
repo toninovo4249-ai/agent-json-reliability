@@ -2,8 +2,9 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.toninovo4249-ai/agent-json-reliability",
   "title": "Agent JSON Reliability",
-  "description": "Deterministic inspect, safe repair, and JSON Schema validation for agent JSON. No LLM.",
+  "description": "Deterministic inspect, safe repair, and JSON Schema validation for agent JSON. No LLM. Hosted x402: POST https://agent-json-reliability.onrender.com/v1/json/reliable",
   "version": "0.1.0",
+  "websiteUrl": "https://agent-json-reliability.onrender.com",
   "repository": {
     "url": "https://github.com/toninovo4249-ai/agent-json-reliability",
     "source": "github"
