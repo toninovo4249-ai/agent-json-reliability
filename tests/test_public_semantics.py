@@ -52,9 +52,19 @@ def test_openapi_marks_free_routes_and_hides_disabled_batch():
         for op in methods.values():
             if isinstance(op, dict) and "security" in op:
                 assert op["security"] == []
-                assert op.get("x-payment-required") is False
+                assert "x-payment-info" not in op
     assert "/v1/json/reliable/batch" not in spec["paths"]
+    reliable = spec["paths"]["/v1/json/reliable"]["post"]
+    assert "x-payment-info" in reliable
+    assert reliable["x-payment-info"]["price"]["mode"] == "fixed"
+    assert reliable["x-payment-info"]["price"]["amount"] == "0.003"
+    assert "402" in reliable["responses"]
+    assert reliable["requestBody"]["content"]["application/json"]["schema"]["required"] == ["text"]
     landing = client.get("/").text
     assert "FREE BETA. NO PAYMENT REQUIRED. Not a paid x402 endpoint." not in landing
     assert "Free:" in landing
+    wk = client.get("/.well-known/x402").json()
+    assert wk["version"] == 1
+    assert len(wk["resources"]) == 1
+    assert wk["resources"][0].endswith("/v1/json/reliable")
 

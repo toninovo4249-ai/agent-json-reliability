@@ -47,15 +47,20 @@ from products.beta.settings import (
     X402_NETWORK,
     X402_PAYMENT_ENABLED,
     current_base_url,
+    discovery_server_url,
     public_exposure_mode,
 )
 from products.beta.cdp_jwt import cdp_auth_configured
 from products.beta.paid_ledger import paid_metrics, record_paid_call
 from products.beta.store import record_v16
 from products.beta.x402_gate import (
+    atomic_amount,
+    configured_asset,
+    configured_network,
     encode_payment_response,
     maybe_payment_response,
     payment_flags_on,
+    seller_receive_address,
     settle_payment,
     valid_seller_receive_address,
 )
@@ -232,7 +237,7 @@ def create_json_beta_app() -> FastAPI:
         title="Agent JSON Reliability",
         version=BETA_VERSION,
         description=OPENAPI_DESCRIPTION,
-        servers=[{"url": current_base_url(), "description": "PUBLIC_BASE_URL"}],
+        servers=[{"url": discovery_server_url(), "description": "Public origin"}],
         docs_url=None,
         redoc_url=None,
     )
@@ -247,35 +252,56 @@ def create_json_beta_app() -> FastAPI:
             description=app.description,
             routes=app.routes,
         )
-        schema["servers"] = [{"url": current_base_url(), "description": "PUBLIC_BASE_URL"}]
-        paid = payment_flags_on()
+        server = discovery_server_url()
+        schema["servers"] = [{"url": server, "description": "Public origin"}]
         schema["info"]["description"] = OPENAPI_DESCRIPTION
         schema["info"]["x-llm-required"] = False
-        schema["info"]["x-payment-required"] = False
-        schema["info"]["x-x402-paid-path"] = "/v1/json/reliable" if paid else None
-        schema["info"]["x-free-routes"] = [
-            "GET /",
-            "GET /health",
-            "GET /ready",
-            "GET /capabilities",
-            "GET /.well-known/agent-services.json",
-            "GET /.well-known/mcp/server-card.json",
-            "GET /robots.txt",
-            "GET /llms.txt",
-            "GET /AGENTS.md",
-            "POST /mcp",
-            "POST /v1/json/inspect",
-            "POST /v1/json/validate",
-            "POST /v1/json/repair",
-        ]
+        schema["info"]["x-guidance"] = (
+            "Free routes: GET /health, POST /v1/json/inspect, POST /v1/json/validate, "
+            "POST /v1/json/repair, POST /mcp. "
+            "Paid route: POST /v1/json/reliable. Unpaid calls return HTTP 402. "
+            "Body: {\"text\": \"<json or malformed json>\", \"schema\": {optional JSON Schema}}."
+        )
+        schema["info"].pop("x-payment-required", None)
+        schema["info"].pop("x-x402-paid-path", None)
         schema["security"] = []
         comps = schema.setdefault("components", {})
-        schemes = comps.setdefault("securitySchemes", {})
-        schemes["x402PaymentSignature"] = {
-            "type": "apiKey",
-            "in": "header",
-            "name": "PAYMENT-SIGNATURE",
-            "description": "x402 v2 PAYMENT-SIGNATURE. Required only for POST /v1/json/reliable.",
+        comps.pop("securitySchemes", None)
+        pay_to = seller_receive_address() if valid_seller_receive_address() else ""
+        x_payment_info = {
+            "price": {"mode": "fixed", "currency": "USD", "amount": "0.003"},
+            "protocols": [
+                {
+                    "x402": {
+                        "scheme": "exact",
+                        "network": configured_network(),
+                        "asset": configured_asset(),
+                        "amount": atomic_amount(),
+                        "payTo": pay_to,
+                    }
+                }
+            ],
+        }
+        reliable_body = {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string", "description": "Malformed or valid JSON text from an agent"},
+                "schema": {"type": "object", "description": "Optional JSON Schema"},
+            },
+        }
+        reliable_200 = {
+            "type": "object",
+            "properties": {
+                "valid_original": {"type": "boolean"},
+                "repaired": {"type": "boolean"},
+                "valid_final": {"type": "boolean"},
+                "schema_valid": {"type": "boolean"},
+                "unsafe_or_ambiguous": {"type": "boolean"},
+                "json": {},
+                "errors": {"type": "array"},
+                "changes": {"type": "array"},
+            },
         }
         paths = schema.setdefault("paths", {})
         if not BATCH_PUBLIC:
@@ -288,26 +314,28 @@ def create_json_beta_app() -> FastAPI:
                     continue
                 if not isinstance(op, dict):
                     continue
-                paid_op = paid and path == "/v1/json/reliable" and method == "post"
-                if paid_op:
-                    op["security"] = [{"x402PaymentSignature": []}]
-                    op["x-payment-required"] = True
-                    op["x-x402"] = {
-                        "scheme": "exact",
-                        "network": "eip155:8453",
-                        "asset": "USDC",
-                        "amount": "3000",
-                        "priceUsdc": "0.003",
-                        "facilitator": "PayAI",
-                    }
-                    op["summary"] = "Paid x402 JSON reliability"
-                    op["description"] = (
-                        "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. "
-                        "0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free."
-                    )
-                else:
-                    op["security"] = []
-                    op["x-payment-required"] = False
+                op["security"] = []
+                op.pop("x-payment-required", None)
+                op.pop("x-x402", None)
+                paid_op = path == "/v1/json/reliable" and method == "post"
+                if not paid_op:
+                    continue
+                op["summary"] = "Paid x402 JSON reliability"
+                op["description"] = (
+                    "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. "
+                    "0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free."
+                )
+                op["x-payment-info"] = x_payment_info
+                op["requestBody"] = {
+                    "required": True,
+                    "content": {"application/json": {"schema": reliable_body}},
+                }
+                responses = op.setdefault("responses", {})
+                responses["200"] = {
+                    "description": "JSON reliability result after payment",
+                    "content": {"application/json": {"schema": reliable_200}},
+                }
+                responses["402"] = {"description": "Payment Required"}
         return schema
 
     app.openapi = custom_openapi
@@ -364,6 +392,15 @@ def create_json_beta_app() -> FastAPI:
     @app.get("/.well-known/mcp/server-card.json")
     def mcp_server_card_route():
         return mcp_server_card()
+
+    @app.get("/.well-known/x402")
+    def well_known_x402():
+        base = discovery_server_url()
+        return {
+            "version": 1,
+            "resources": [f"{base}/v1/json/reliable"],
+            "instructions": "POST /v1/json/reliable is the paid x402 resource. inspect/validate/repair and MCP are free.",
+        }
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():

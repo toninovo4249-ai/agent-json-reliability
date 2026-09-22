@@ -25,6 +25,29 @@ def current_base_url() -> str:
     return (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("BASE_URL") or "http://127.0.0.1:8770").rstrip("/")
 
 
+PRODUCTION_ORIGIN = "https://agent-json-reliability.onrender.com"
+
+
+def discovery_server_url() -> str:
+    """Absolute public origin for OpenAPI servers. Never localhost/tunnel on Render."""
+    candidates = [
+        (os.environ.get("PUBLIC_BASE_URL") or "").rstrip("/"),
+        (os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/"),
+        (os.environ.get("BASE_URL") or "").rstrip("/"),
+    ]
+    for u in candidates:
+        if not u:
+            continue
+        low = u.lower()
+        if "trycloudflare.com" in low or "ngrok" in low:
+            continue
+        if is_https_public(u):
+            return u
+    if (os.environ.get("RENDER") or os.environ.get("RENDER_EXTERNAL_HOSTNAME") or "").strip():
+        return PRODUCTION_ORIGIN
+    return current_base_url()
+
+
 def is_https_public(url: str | None = None) -> bool:
     u = (url or current_base_url()).lower()
     return u.startswith("https://") and "127.0.0.1" not in u and "localhost" not in u
@@ -95,6 +118,7 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/.well-known/agent-services.json",
     "/.well-known/mcp/server-card.json",
+    "/.well-known/x402",
     "/robots.txt",
     "/llms.txt",
     "/AGENTS.md",

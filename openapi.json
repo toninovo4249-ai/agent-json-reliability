@@ -5,23 +5,7 @@
     "description": "Agent JSON Reliability. Free: inspect, validate, repair, MCP. Paid hosted reliability endpoint: POST /v1/json/reliable (0.003 USDC per call via x402 on Base). Inspect, validate, repair, and MCP are not paid x402 endpoints.",
     "version": "0.1.0",
     "x-llm-required": false,
-    "x-payment-required": false,
-    "x-x402-paid-path": null,
-    "x-free-routes": [
-      "GET /",
-      "GET /health",
-      "GET /ready",
-      "GET /capabilities",
-      "GET /.well-known/agent-services.json",
-      "GET /.well-known/mcp/server-card.json",
-      "GET /robots.txt",
-      "GET /llms.txt",
-      "GET /AGENTS.md",
-      "POST /mcp",
-      "POST /v1/json/inspect",
-      "POST /v1/json/validate",
-      "POST /v1/json/repair"
-    ]
+    "x-guidance": "Free routes: GET /health, POST /v1/json/inspect, POST /v1/json/validate, POST /v1/json/repair, POST /mcp. Paid route: POST /v1/json/reliable. Unpaid calls return HTTP 402. Body: {\"text\": \"<json or malformed json>\", \"schema\": {optional JSON Schema}}."
   },
   "paths": {
     "/": {
@@ -40,8 +24,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/health": {
@@ -58,8 +41,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/ready": {
@@ -76,8 +58,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/capabilities": {
@@ -94,8 +75,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/.well-known/agent-services.json": {
@@ -112,8 +92,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/.well-known/mcp/server-card.json": {
@@ -130,8 +109,24 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
+      }
+    },
+    "/.well-known/x402": {
+      "get": {
+        "summary": "Well Known X402",
+        "operationId": "well_known_x402__well_known_x402_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": []
       }
     },
     "/robots.txt": {
@@ -150,8 +145,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/llms.txt": {
@@ -170,8 +164,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/AGENTS.md": {
@@ -190,8 +183,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/mcp": {
@@ -208,8 +200,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/v1/json/inspect": {
@@ -226,8 +217,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/v1/json/validate": {
@@ -244,8 +234,7 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/v1/json/repair": {
@@ -262,44 +251,104 @@
             }
           }
         },
-        "security": [],
-        "x-payment-required": false
+        "security": []
       }
     },
     "/v1/json/reliable": {
       "post": {
-        "summary": "Reliable",
+        "summary": "Paid x402 JSON reliability",
         "operationId": "reliable_v1_json_reliable_post",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "JSON reliability result after payment",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid_original": {
+                      "type": "boolean"
+                    },
+                    "repaired": {
+                      "type": "boolean"
+                    },
+                    "valid_final": {
+                      "type": "boolean"
+                    },
+                    "schema_valid": {
+                      "type": "boolean"
+                    },
+                    "unsafe_or_ambiguous": {
+                      "type": "boolean"
+                    },
+                    "json": {},
+                    "errors": {
+                      "type": "array"
+                    },
+                    "changes": {
+                      "type": "array"
+                    }
+                  }
+                }
               }
             }
+          },
+          "402": {
+            "description": "Payment Required"
           }
         },
         "security": [],
-        "x-payment-required": false
+        "description": "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. 0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free.",
+        "x-payment-info": {
+          "price": {
+            "mode": "fixed",
+            "currency": "USD",
+            "amount": "0.003"
+          },
+          "protocols": [
+            {
+              "x402": {
+                "scheme": "exact",
+                "network": "eip155:8453",
+                "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "amount": "3000",
+                "payTo": ""
+              }
+            }
+          ]
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Malformed or valid JSON text from an agent"
+                  },
+                  "schema": {
+                    "type": "object",
+                    "description": "Optional JSON Schema"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
   "servers": [
     {
       "url": "http://127.0.0.1:8770",
-      "description": "PUBLIC_BASE_URL"
+      "description": "Public origin"
     }
   ],
   "security": [],
-  "components": {
-    "securitySchemes": {
-      "x402PaymentSignature": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "PAYMENT-SIGNATURE",
-        "description": "x402 v2 PAYMENT-SIGNATURE. Required only for POST /v1/json/reliable."
-      }
-    }
-  }
+  "components": {}
 }
