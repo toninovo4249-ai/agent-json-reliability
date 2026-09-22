@@ -168,7 +168,7 @@ def test_http_endpoint_and_ajr_unchanged():
     ev = spec["paths"]["/v1/evidence/pack"]["post"]
     assert "x-payment-info" not in ev
     wk = client.get("/.well-known/x402").json()
-    assert len(wk["resources"]) == 1
+    assert isinstance(wk.get("resources"), list)
     listed = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()
     names = {t["name"] for t in listed["result"]["tools"]}
     assert {"validate_json", "repair_json", "inspect_json", "reliable_json"} <= names

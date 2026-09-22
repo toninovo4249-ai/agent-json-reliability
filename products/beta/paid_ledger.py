@@ -35,9 +35,28 @@ def _conn() -> sqlite3.Connection:
         """
     )
     cols = {r[1] for r in c.execute("PRAGMA table_info(paid_calls)")}
-    for name, typ in (("pay_to", "TEXT"), ("verify_status", "TEXT"), ("usd_price", "TEXT")):
+    for name, typ in (
+        ("pay_to", "TEXT"),
+        ("verify_status", "TEXT"),
+        ("usd_price", "TEXT"),
+        ("product_id", "TEXT"),
+    ):
         if name not in cols:
             c.execute(f"ALTER TABLE paid_calls ADD COLUMN {name} {typ}")
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_events (
+          id INTEGER PRIMARY KEY,
+          timestamp_utc TEXT NOT NULL,
+          product_id TEXT,
+          endpoint TEXT,
+          event TEXT,
+          is_real INTEGER DEFAULT 0,
+          latency_ms REAL,
+          http_status INTEGER
+        )
+        """
+    )
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS paid_calls_payment_hash ON paid_calls(payment_hash) WHERE payment_hash IS NOT NULL")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS paid_calls_nonce ON paid_calls(nonce) WHERE nonce IS NOT NULL AND nonce!=''")
     c.commit()
@@ -77,13 +96,14 @@ def record_paid_call(row: dict[str, Any]) -> None:
         c.execute(
             """
             INSERT INTO paid_calls (
-              timestamp_utc, endpoint, payer, pay_to, network, asset, price, usd_price, amount_atomic,
+              timestamp_utc, endpoint, product_id, payer, pay_to, network, asset, price, usd_price, amount_atomic,
               tx_hash, payment_hash, nonce, verify_status, settlement_status, response_status, processing_ms, is_real
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 row.get("timestamp") or datetime.now(timezone.utc).isoformat(),
                 (row.get("endpoint") or "")[:200],
+                (row.get("product_id") or "")[:80],
                 (row.get("payer") or None),
                 row.get("payTo") or row.get("pay_to"),
                 row.get("network"),
@@ -148,6 +168,118 @@ def paid_metrics(endpoint: str | None = None) -> dict[str, Any]:
     }
 
 
+def record_product_event(row: dict[str, Any]) -> None:
+    c = _conn()
+    try:
+        c.execute(
+            """
+            INSERT INTO product_events (timestamp_utc, product_id, endpoint, event, is_real, latency_ms, http_status)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                (row.get("product_id") or "")[:80],
+                (row.get("endpoint") or "")[:200],
+                (row.get("event") or "")[:80],
+                1 if row.get("is_real") else 0,
+                float(row.get("latency_ms") or 0),
+                int(row.get("http_status") or 0),
+            ),
+        )
+        c.commit()
+    finally:
+        c.close()
+
+
+def _median(xs: list[float]) -> float | None:
+    if not xs:
+        return None
+    ys = sorted(xs)
+    n = len(ys)
+    mid = n // 2
+    if n % 2:
+        return round(ys[mid], 3)
+    return round((ys[mid - 1] + ys[mid]) / 2, 3)
+
+
+def product_funnel_metrics(product_id: str, endpoint: str) -> dict[str, Any]:
+    c = _conn()
+    counts: dict[str, int] = {}
+    for (ev, n) in c.execute(
+        "SELECT event, COUNT(*) FROM product_events WHERE product_id=? AND is_real=1 GROUP BY event",
+        (product_id,),
+    ):
+        counts[str(ev)] = int(n)
+    unpaid = counts.get("unpaid_402", 0)
+    attempts = counts.get("payment_attempt", 0)
+    v_ok = counts.get("verify_success", 0)
+    v_fail = counts.get("verify_failure", 0)
+    fails = counts.get("processing_failure", 0)
+    lat_rows = [
+        r[0]
+        for r in c.execute(
+            "SELECT processing_ms FROM paid_calls WHERE endpoint=? AND settlement_status='settled' AND is_real=1 AND processing_ms IS NOT NULL",
+            (endpoint,),
+        )
+        if r[0] is not None
+    ]
+    paid = paid_metrics(endpoint)
+    drop = "none"
+    if unpaid and not attempts:
+        drop = "402_no_payment_attempt"
+    elif attempts and not v_ok:
+        drop = "payment_attempt_verify_failed"
+    elif v_ok and not paid["REAL_PAID_CALLS"]:
+        drop = "verify_no_settle"
+    elif paid["REAL_PAID_CALLS"] and not paid["REPEAT_REAL_PAID_BUYERS"]:
+        drop = "paid_no_repeat"
+    elif paid["REPEAT_REAL_PAID_BUYERS"]:
+        drop = "repeat_buyer"
+    c.close()
+    return {
+        "product_id": product_id,
+        "endpoint": endpoint,
+        "UNPAID_402_CALLS": unpaid,
+        "PAYMENT_ATTEMPTS": attempts,
+        "VERIFY_SUCCESS": v_ok,
+        "VERIFY_FAILURE": v_fail,
+        "REAL_PAID_CALLS": paid["REAL_PAID_CALLS"],
+        "DISTINCT_REAL_PAID_BUYERS": paid["DISTINCT_REAL_PAID_BUYERS"],
+        "REPEAT_REAL_PAID_BUYERS": paid["REPEAT_REAL_PAID_BUYERS"],
+        "REAL_REVENUE_USDC": paid["REAL_REVENUE_USDC"],
+        "PROCESSING_FAILURES": fails,
+        "MEDIAN_LATENCY_MS": _median([float(x) for x in lat_rows]),
+        "DROP_OFF": drop,
+        "FAIL_RATE": round(fails / max(1, paid["REAL_PAID_CALLS"] + fails), 4),
+    }
+
+
+def store_board() -> list[dict[str, Any]]:
+    from products.beta.product_registry import PRODUCTS
+
+    rows = []
+    for p in PRODUCTS:
+        m = product_funnel_metrics(p["id"], p["path"])
+        rows.append(
+            {
+                "PRODUCT": p["id"],
+                "NAME": p["name"],
+                "PRICE": p["price_usdc"],
+                "402_CALLS": m["UNPAID_402_CALLS"],
+                "PAYMENT_ATTEMPTS": m["PAYMENT_ATTEMPTS"],
+                "PAID_CALLS": m["REAL_PAID_CALLS"],
+                "BUYERS": m["DISTINCT_REAL_PAID_BUYERS"],
+                "REPEAT_BUYERS": m["REPEAT_REAL_PAID_BUYERS"],
+                "REVENUE": m["REAL_REVENUE_USDC"],
+                "LATENCY": m["MEDIAN_LATENCY_MS"],
+                "FAIL_RATE": m["FAIL_RATE"],
+                "DROP_OFF": m["DROP_OFF"],
+            }
+        )
+    rows.sort(key=lambda r: (-float(r["REVENUE"] or 0), -int(r["REPEAT_BUYERS"] or 0), -int(r["BUYERS"] or 0)))
+    return rows
+
+
 def split_paid_metrics() -> dict[str, Any]:
     total = paid_metrics()
     ajr = paid_metrics("/v1/json/reliable")
@@ -162,5 +294,8 @@ def split_paid_metrics() -> dict[str, Any]:
         "EVIDENCE_REPEAT_PAID_BUYERS": ev["REPEAT_REAL_PAID_BUYERS"],
         "EVIDENCE_REAL_REVENUE_USDC": ev["REAL_REVENUE_USDC"],
         "TOTAL_REAL_PAID_CALLS": total["REAL_PAID_CALLS"],
+        "TOTAL_DISTINCT_REAL_PAID_BUYERS": total["DISTINCT_REAL_PAID_BUYERS"],
+        "TOTAL_REPEAT_REAL_PAID_BUYERS": total["REPEAT_REAL_PAID_BUYERS"],
         "TOTAL_REAL_REVENUE_USDC": total["REAL_REVENUE_USDC"],
+        "store_board": store_board(),
     }

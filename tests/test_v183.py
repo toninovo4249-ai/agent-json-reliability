@@ -37,9 +37,9 @@ def test_mock_evidence_402_and_ajr_distinct(monkeypatch, tmp_path):
     assert spec["paths"]["/v1/json/reliable"]["post"]["x-payment-info"]["price"]["amount"] == "0.003"
     assert spec["paths"]["/v1/evidence/pack"]["post"]["x-payment-info"]["price"]["amount"] == "0.0075"
     wk = client.get("/.well-known/x402").json()
-    assert len(wk["resources"]) == 2
     assert any(r.endswith("/v1/json/reliable") for r in wk["resources"])
     assert any(r.endswith("/v1/evidence/pack") for r in wk["resources"])
+    assert len(wk["resources"]) >= 2
     listed = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()
     names = {t["name"] for t in listed["result"]["tools"]}
     assert {"validate_json", "repair_json", "inspect_json", "reliable_json"} <= names

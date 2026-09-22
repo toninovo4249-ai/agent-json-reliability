@@ -4,14 +4,15 @@ from html import escape
 
 from products.beta.settings import current_base_url, discovery_server_url, public_exposure_mode
 from products.beta.x402_gate import payment_flags_on
+from products.beta.product_registry import PRODUCTS, active_paid_products
 
 INDEXNOW_KEY = "8f2c1a9e4b774d1e9c6a0b3d5e7f1021"
 
 OPENAPI_DESCRIPTION = (
-    "Agent JSON Reliability. "
+    "Agent JSON Reliability and Agent Utility Store. "
     "Free: inspect, validate, repair, MCP. "
-    "Paid x402 endpoints: POST /v1/json/reliable (0.003 USDC) and "
-    "POST /v1/evidence/pack (0.0075 USDC Fresh Web Evidence Pack). "
+    "Paid x402: POST /v1/json/reliable (0.003 USDC) and POST /v1/evidence/pack (0.0075 USDC) "
+    "plus additional store utilities when enabled. "
     "Inspect, validate, repair, and MCP are not paid x402 endpoints."
 )
 
@@ -51,6 +52,7 @@ def landing_html() -> str:
             "The URL may change between sessions. Not production hosting.</p>"
         )
     ld = json_ld_software()
+    store = agent_utility_store_html()
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -73,6 +75,7 @@ def landing_html() -> str:
   <p><strong>Before:</strong> <code>{{'name': 'agent',}}</code> (single quotes, trailing comma)</p>
   <p><strong>After:</strong> <code>{{"name": "agent"}}</code> — only if the repair is structurally safe. Missing semantic values are never invented.</p>
   <p>Primary: <code>POST {escape(shown)}/v1/json/reliable</code></p>
+  {store}
   <p>Manifest: <a href="/.well-known/agent-services.json">/.well-known/agent-services.json</a>
      · OpenAPI: <a href="/openapi.json">/openapi.json</a>
      · <a href="/llms.txt">llms.txt</a> · <a href="/AGENTS.md">AGENTS.md</a>
@@ -97,11 +100,43 @@ def landing_html() -> str:
 """
 
 
+def agent_utility_store_html() -> str:
+    cats = [
+        ("json", "JSON"),
+        ("web", "Web"),
+        ("evidence", "Evidence"),
+        ("url_security", "URL/Security"),
+        ("api", "API/OpenAPI"),
+        ("mcp_x402", "MCP/x402"),
+    ]
+    paid = {p["id"] for p in active_paid_products()} if payment_flags_on() else set()
+    chunks = [
+        "<h2>Agent Utility Store</h2>",
+        "<p>Pay-per-call utilities for agents. Base USDC via x402. No subscription.</p>",
+    ]
+    for key, label in cats:
+        chunks.append(f"<h3>{escape(label)}</h3><ul>")
+        for p in PRODUCTS:
+            if p["category"] != key:
+                continue
+            flag = "paid" if p["id"] in paid or (payment_flags_on() and p["id"] in paid) else ("paid" if payment_flags_on() else "listed")
+            chunks.append(
+                "<li>"
+                f"<strong>{escape(p['name'])}</strong> — {escape(p['purpose'])} "
+                f"({escape(str(p['price_usdc']))} USDC, <code>POST {escape(p['path'])}</code>)"
+                "</li>"
+            )
+        chunks.append("</ul>")
+    return "\n".join(chunks)
+
+
 def agents_md() -> str:
     base = discovery_server_url()
     paid = payment_flags_on()
     pay_note = (
-        "POST /v1/json/reliable is paid x402 exact 0.003 USDC on Base. inspect/validate/repair and MCP stay free."
+        "POST /v1/json/reliable is paid x402 exact 0.003 USDC on Base. "
+        "POST /v1/evidence/pack is 0.0075 USDC. Additional Agent Utility Store routes are paid when listed in /.well-known/x402. "
+        "inspect/validate/repair and MCP stay free."
         if paid
         else "Hosted payment flags are off: HTTP routes are free."
     )
@@ -137,6 +172,7 @@ def llms_txt() -> str:
         "Free: inspect, validate, repair, MCP.\n"
         "Paid hosted reliability endpoint: POST /v1/json/reliable "
         "(0.003 USDC per call via x402 on Base when payment is enabled).\n"
+        "Paid evidence: POST /v1/evidence/pack (0.0075 USDC). Agent Utility Store additional paid routes: see /.well-known/x402.\n"
         "AI agents frequently emit malformed JSON. This API deterministically inspects, "
         "repairs and schema-validates JSON without another LLM call.\n"
         f"Primary: POST {base}/v1/json/reliable\n"

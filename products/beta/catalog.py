@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from products.beta.paid_ledger import paid_metrics
 from products.beta.settings import current_base_url, is_https_public
+from products.beta.product_registry import active_paid_products
 from products.beta.x402_gate import payment_flags_on, payment_requirements
 from products.gateway.manifest import tools
 
@@ -74,6 +75,19 @@ def public_catalog() -> dict:
         "NETWORK": "eip155:8453",
         "ASSET": "USDC",
         "FACILITATOR": "PayAI",
+        "store_products": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "path": p["path"],
+                "price_usdc": p["price_usdc"],
+                "price_atomic": p["price_atomic"],
+                "category": p["category"],
+                "description": p["description"],
+                "payment_required": True,
+            }
+            for p in active_paid_products()
+        ],
         "BAZAAR_DISCOVERY_READY": paid,
         "CIRCLE_DISCOVERY_READY": paid,
         "BAZAAR_ELIGIBLE": real_paid >= 1,

@@ -6,7 +6,7 @@ import http.client
 import socket
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urljoin
@@ -54,6 +54,8 @@ class FetchResult:
     error: str | None = None
     robots_blocked: bool = False
     truncated: bool = False
+    headers: dict[str, str] = field(default_factory=dict)
+    hops: list[dict] = field(default_factory=list)
 
 
 def _now() -> str:
@@ -86,7 +88,13 @@ def _read_limited(resp, max_bytes: int) -> tuple[bytes, bool]:
     return b"".join(chunks), truncated
 
 
-def _request(url: str, timeout: float, max_bytes: int, method: str = "GET") -> tuple[int, dict[str, str], bytes, bool]:
+def _request(
+    url: str,
+    timeout: float,
+    max_bytes: int,
+    method: str = "GET",
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], bytes, bool]:
     scheme, host, path, port, _ = parse_public_http_url(url)
     ips = resolve_public(host)
     ip = ips[0]
@@ -99,13 +107,17 @@ def _request(url: str, timeout: float, max_bytes: int, method: str = "GET") -> t
         conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
         conn.putheader("Host", host if port in (80, 443) else f"{host}:{port}")
         conn.putheader("User-Agent", USER_AGENT)
-        conn.putheader("Accept", "text/html,application/json,application/ld+json,text/plain")
+        conn.putheader("Accept", "text/html,application/json,application/ld+json,text/plain,*/*")
         conn.putheader("Accept-Encoding", "identity")
         conn.putheader("Connection", "close")
+        for hk, hv in (extra_headers or {}).items():
+            conn.putheader(hk, hv)
         conn.endheaders()
         resp = conn.getresponse()
         headers = {k.lower(): v for k, v in resp.getheaders()}
         cl = headers.get("content-length")
+        if method == "HEAD":
+            return resp.status, headers, b"", False
         if cl and cl.isdigit() and int(cl) > max_bytes and method == "GET":
             body, truncated = resp.read(max_bytes), True
         else:
@@ -122,12 +134,16 @@ def fetch_url(
     max_bytes: int = MAX_BYTES,
     max_redirects: int = MAX_REDIRECTS,
     check_robots: bool = True,
+    method: str = "GET",
+    extra_headers: dict[str, str] | None = None,
+    keep_error_body: bool = False,
     _transport: Callable | None = None,
 ) -> FetchResult:
     started = _now()
     transport = _transport or _request
     current = url.strip()
     hops = 0
+    hop_log: list[dict] = []
     robots_cache: dict[str, str | None] = {}
     try:
         parse_public_http_url(current)
@@ -138,9 +154,11 @@ def fetch_url(
     while True:
         remain = deadline - time.monotonic()
         if remain <= 0:
-            return FetchResult(requested_url=url, url=current, fetched_at=started, error="timeout", http_status=None)
+            return FetchResult(
+                requested_url=url, url=current, fetched_at=started, error="timeout", http_status=None, hops=hop_log
+            )
         try:
-            if check_robots:
+            if check_robots and method == "GET":
                 ru = robots_url_for(current)
                 if ru not in robots_cache:
                     try:
@@ -156,39 +174,65 @@ def fetch_url(
                         error="robots_disallowed",
                         robots_blocked=True,
                         http_status=None,
+                        hops=hop_log,
                     )
-            status, headers, body, truncated = transport(current, remain, max_bytes, "GET")
+            status, headers, body, truncated = transport(current, remain, max_bytes, method, extra_headers)
+        except TypeError:
+            try:
+                status, headers, body, truncated = transport(current, remain, max_bytes, method)
+            except SsrfError as e:
+                return FetchResult(requested_url=url, url=current, fetched_at=started, error=str(e), hops=hop_log)
         except SsrfError as e:
-            return FetchResult(requested_url=url, url=current, fetched_at=started, error=str(e))
+            return FetchResult(requested_url=url, url=current, fetched_at=started, error=str(e), hops=hop_log)
         except TimeoutError:
-            return FetchResult(requested_url=url, url=current, fetched_at=started, error="timeout")
+            return FetchResult(requested_url=url, url=current, fetched_at=started, error="timeout", hops=hop_log)
         except OSError as e:
             msg = "timeout" if "timed out" in str(e).lower() else "fetch_failed"
-            return FetchResult(requested_url=url, url=current, fetched_at=started, error=msg)
+            return FetchResult(requested_url=url, url=current, fetched_at=started, error=msg, hops=hop_log)
         except Exception:
-            return FetchResult(requested_url=url, url=current, fetched_at=started, error="fetch_failed")
+            return FetchResult(requested_url=url, url=current, fetched_at=started, error="fetch_failed", hops=hop_log)
 
+        hop_log.append({"url": current, "status": status, "location": headers.get("location")})
         if status in {301, 302, 303, 307, 308}:
             loc = headers.get("location")
             if not loc:
                 return FetchResult(
-                    requested_url=url, url=current, fetched_at=started, http_status=status, error="redirect_missing_location"
+                    requested_url=url,
+                    url=current,
+                    fetched_at=started,
+                    http_status=status,
+                    error="redirect_missing_location",
+                    headers=headers,
+                    hops=hop_log,
                 )
             hops += 1
             if hops > max_redirects:
                 return FetchResult(
-                    requested_url=url, url=current, fetched_at=started, http_status=status, error="too_many_redirects"
+                    requested_url=url,
+                    url=current,
+                    fetched_at=started,
+                    http_status=status,
+                    error="too_many_redirects",
+                    headers=headers,
+                    hops=hop_log,
                 )
             nxt = urljoin(current, loc)
             try:
                 parse_public_http_url(nxt)
             except SsrfError as e:
-                return FetchResult(requested_url=url, url=nxt, fetched_at=started, error=str(e), http_status=status)
+                return FetchResult(
+                    requested_url=url,
+                    url=nxt,
+                    fetched_at=started,
+                    error=str(e),
+                    http_status=status,
+                    headers=headers,
+                    hops=hop_log,
+                )
             current = nxt
             continue
 
-        ctype = (headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-        if status == 200 and not _ctype_ok(headers.get("content-type")):
+        if status == 200 and method == "GET" and not _ctype_ok(headers.get("content-type")):
             return FetchResult(
                 requested_url=url,
                 url=current,
@@ -198,8 +242,12 @@ def fetch_url(
                 content_sha256=hashlib.sha256(body).hexdigest() if body else None,
                 error="unsupported_content_type",
                 truncated=truncated,
+                headers=headers,
+                hops=hop_log,
+                body=b"",
             )
         sha = hashlib.sha256(body).hexdigest() if body else hashlib.sha256(b"").hexdigest()
+        keep_body = status == 200 or keep_error_body
         return FetchResult(
             requested_url=url,
             url=current,
@@ -207,7 +255,9 @@ def fetch_url(
             http_status=status,
             content_sha256=sha,
             content_type=headers.get("content-type"),
-            body=body if status == 200 else b"",
+            body=body if keep_body else b"",
             truncated=truncated,
             error=None if status == 200 else f"http_{status}",
+            headers=headers,
+            hops=hop_log,
         )

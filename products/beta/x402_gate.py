@@ -25,9 +25,17 @@ from products.beta.settings import (
     current_base_url,
 )
 
+from products.beta.product_registry import (
+    PRODUCTS,
+    max_buyers,
+    max_calls,
+    product_by_path,
+    product_paid_enabled,
+)
+
 PAID_AJR = "/v1/json/reliable"
 PAID_EVIDENCE = "/v1/evidence/pack"
-PAID_HTTP_PATHS = {PAID_AJR, PAID_EVIDENCE}
+PAID_HTTP_PATHS = {p["path"] for p in PRODUCTS}
 FACILITATOR_CDP = "https://api.cdp.coinbase.com/platform/v2/x402"
 FACILITATOR_PAYAI = "https://facilitator.payai.network"
 FACILITATOR_DEXTER = "https://x402.dexter.cash"
@@ -136,14 +144,24 @@ def evidence_atomic_amount() -> str:
 
 
 def amount_for_path(path: str) -> str:
+    prod = product_by_path(path)
+    if path == PAID_AJR:
+        return atomic_amount()
     if path == PAID_EVIDENCE:
         return evidence_atomic_amount()
+    if prod:
+        return str(int(prod["price_atomic"]))
     return atomic_amount()
 
 
 def price_usdc_for_path(path: str) -> str:
+    prod = product_by_path(path)
+    if path == PAID_AJR:
+        return str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC)
     if path == PAID_EVIDENCE:
         return str(os.environ.get("EVIDENCE_PRICE_USDC") or EVIDENCE_PRICE_USDC)
+    if prod:
+        return str(prod["price_usdc"])
     return str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC)
 
 
@@ -164,24 +182,36 @@ def paid_route_blockers(path: str = PAID_AJR) -> list[str]:
         errs.append("invalid_network")
     if configured_asset().lower() != BASE_USDC.lower():
         errs.append("invalid_asset")
-    if path == PAID_EVIDENCE:
+    if prod_path := product_by_path(path):
+        if amount_for_path(path) != str(int(prod_path["price_atomic"])):
+            errs.append("invalid_price")
+        pid = prod_path["id"]
+        if pid == "json_reliable":
+            if first_paid_buyer_mode():
+                m = paid_ledger.paid_metrics(PAID_AJR)
+                if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_PAID_REQUESTS_BEFORE_REVIEW:
+                    errs.append("first_paid_buyer_max_requests")
+                if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW:
+                    errs.append("first_paid_buyer_max_buyers")
+        elif pid == "evidence_pack":
+            if evidence_first_buyer_mode():
+                m = paid_ledger.paid_metrics(PAID_EVIDENCE)
+                if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_REAL_EVIDENCE_PAID_CALLS:
+                    errs.append("evidence_first_paid_max_requests")
+                if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_EVIDENCE_BUYERS:
+                    errs.append("evidence_first_paid_max_buyers")
+        else:
+            m = paid_ledger.paid_metrics(path)
+            if int(m.get("REAL_PAID_CALLS") or 0) >= max_calls(prod_path):
+                errs.append(f"{pid}_max_requests")
+            if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= max_buyers(prod_path):
+                errs.append(f"{pid}_max_buyers")
+    elif path == PAID_EVIDENCE:
         if evidence_atomic_amount() != REQUIRED_EVIDENCE_ATOMIC:
             errs.append("invalid_evidence_price")
-        if evidence_first_buyer_mode():
-            m = paid_ledger.paid_metrics(PAID_EVIDENCE)
-            if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_REAL_EVIDENCE_PAID_CALLS:
-                errs.append("evidence_first_paid_max_requests")
-            if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_EVIDENCE_BUYERS:
-                errs.append("evidence_first_paid_max_buyers")
     else:
         if atomic_amount() != REQUIRED_ATOMIC:
             errs.append("invalid_price")
-        if first_paid_buyer_mode():
-            m = paid_ledger.paid_metrics(PAID_AJR)
-            if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_PAID_REQUESTS_BEFORE_REVIEW:
-                errs.append("first_paid_buyer_max_requests")
-            if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW:
-                errs.append("first_paid_buyer_max_buyers")
     mode = facilitator_mode()
     if mode == "blocked":
         errs.append("mainnet_payment_disabled")
@@ -255,6 +285,7 @@ def evidence_bazaar_extensions() -> dict[str, Any]:
 def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
     url = current_base_url().rstrip("/") + resource_path
     pay_to = seller_receive_address() if valid_seller_receive_address() else ""
+    prod = product_by_path(resource_path)
     if resource_path == PAID_EVIDENCE:
         desc = (
             "Fresh Web Evidence Pack for AI agents. "
@@ -264,11 +295,28 @@ def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
         amount = evidence_atomic_amount()
         price = price_usdc_for_path(PAID_EVIDENCE)
         ext = evidence_bazaar_extensions()
-    else:
+    elif resource_path == PAID_AJR:
         desc = "Deterministic JSON inspect, safe repair, and optional JSON Schema validation."
         amount = atomic_amount()
         price = price_usdc_for_path(PAID_AJR)
         ext = bazaar_extensions()
+    else:
+        desc = (prod or {}).get("description") or "Deterministic agent utility."
+        amount = amount_for_path(resource_path)
+        price = price_usdc_for_path(resource_path)
+        ext = {
+            "bazaar": {
+                "info": {
+                    "input": {
+                        "type": "http",
+                        "method": "POST",
+                        "bodyType": "json",
+                        "bodySchema": {"type": "object"},
+                    },
+                    "output": {"example": {"ok": True}},
+                }
+            }
+        }
     return {
         "x402Version": 2,
         "error": "PAYMENT-SIGNATURE header is required",
@@ -516,25 +564,48 @@ def encode_payment_response(receipt: dict[str, Any]) -> str:
 
 
 def maybe_payment_response(request: Request, path: str) -> JSONResponse | None:
-    """Verify-before-work. Returns 402/503 or None to proceed. Does not settle. Does not fetch."""
+    """Verify-before-work. Returns 402/503/404 or None to proceed. Does not settle. Does not fetch."""
+    prod = product_by_path(path)
     if path == PAID_EVIDENCE:
         if not evidence_payment_flags_on():
             return None
     elif path == PAID_AJR:
         if not payment_flags_on():
             return None
-    else:
+    elif prod is None:
         return None
+    elif not product_paid_enabled(prod):
+        if not payment_flags_on():
+            return None
+        return JSONResponse({"error": "product_disabled", "path": path}, status_code=404)
     blockers = paid_route_blockers(path)
     if blockers:
         return _503(blockers)
     raw = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
     payload = decode_payment_signature(raw)
+    kind = str(getattr(request.state, "traffic_kind", "") or "")
+    is_real_event = kind not in {"SYNTHETIC_EXTERNAL_BUYER", "SYNTHETIC_BUYER", "INTERNAL_TEST", "LOCALHOST"}
+    pid = (prod or {}).get("id") or ("json_reliable" if path == PAID_AJR else "evidence_pack")
+    if raw:
+        paid_ledger.record_product_event(
+            {"product_id": pid, "endpoint": path, "event": "payment_attempt", "is_real": is_real_event, "http_status": 0}
+        )
     verified = verify_payment(payload, raw, path)
     if verified.get("verify_status") in {"verified", "mock_valid"}:
+        paid_ledger.record_product_event(
+            {"product_id": pid, "endpoint": path, "event": "verify_success", "is_real": is_real_event, "http_status": 0}
+        )
         request.state.x402_verified = verified
         request.state.x402_payload = payload
         return None
+    if raw:
+        paid_ledger.record_product_event(
+            {"product_id": pid, "endpoint": path, "event": "verify_failure", "is_real": is_real_event, "http_status": 402}
+        )
+    else:
+        paid_ledger.record_product_event(
+            {"product_id": pid, "endpoint": path, "event": "unpaid_402", "is_real": is_real_event, "http_status": 402}
+        )
     return _402(path)
 
 
