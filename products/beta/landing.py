@@ -10,8 +10,8 @@ INDEXNOW_KEY = "8f2c1a9e4b774d1e9c6a0b3d5e7f1021"
 OPENAPI_DESCRIPTION = (
     "Agent JSON Reliability. "
     "Free: inspect, validate, repair, MCP. "
-    "Paid hosted reliability endpoint: POST /v1/json/reliable "
-    "(0.003 USDC per call via x402 on Base). "
+    "Paid x402 endpoints: POST /v1/json/reliable (0.003 USDC) and "
+    "POST /v1/evidence/pack (0.0075 USDC Fresh Web Evidence Pack). "
     "Inspect, validate, repair, and MCP are not paid x402 endpoints."
 )
 

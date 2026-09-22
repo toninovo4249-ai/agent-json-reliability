@@ -50,6 +50,7 @@ from products.beta.settings import (
     MAX_STRING_CHARS,
     MAINNET_PAYMENT_ENABLED,
     PAID_PRICE_USDC,
+    EVIDENCE_PRICE_USDC,
     PAID_ROUTE_ENABLED,
     PAYMENT_REQUIRED,
     PUBLIC_BETA_CONFIRM,
@@ -62,13 +63,17 @@ from products.beta.settings import (
 )
 from products.beta.acquisition import acquisition_metrics
 from products.beta.cdp_jwt import cdp_auth_configured
-from products.beta.paid_ledger import paid_metrics, record_paid_call
+from products.beta.paid_ledger import record_paid_call, split_paid_metrics
 from products.beta.store import record_v16
 from products.beta.x402_gate import (
+    PAID_AJR,
+    PAID_EVIDENCE,
     atomic_amount,
     configured_asset,
     configured_network,
     encode_payment_response,
+    evidence_atomic_amount,
+    evidence_payment_flags_on,
     maybe_payment_response,
     payment_flags_on,
     seller_receive_address,
@@ -145,10 +150,10 @@ class BetaMiddleware(BaseHTTPMiddleware):
         resp = None
         try:
             # Unpaid paid-route probes must 402 before FastAPI body/schema validation.
-            if path == "/v1/json/reliable":
+            if path in {PAID_AJR, PAID_EVIDENCE}:
                 sig = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
                 if not sig:
-                    pay_block = maybe_payment_response(request, "/v1/json/reliable")
+                    pay_block = maybe_payment_response(request, path)
                     if pay_block is not None:
                         resp = pay_block
             if resp is None:
@@ -182,7 +187,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
             if kind == "REAL_EXTERNAL_UNKNOWN":
                 kind = "RANDOM_PROBE"
         pay_sig = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
-        if path == "/v1/json/reliable" and pay_sig:
+        if path in {PAID_AJR, PAID_EVIDENCE} and pay_sig:
             probe = "payment_attempt"
         mcp_product_call = False
         if path == "/mcp":
@@ -286,9 +291,10 @@ def create_json_beta_app() -> FastAPI:
         schema["info"]["x-guidance"] = (
             "Free routes: GET /health, POST /v1/json/inspect, POST /v1/json/validate, "
             "POST /v1/json/repair, POST /mcp. "
-            "Paid route: POST /v1/json/reliable. Unpaid calls return HTTP 402. "
-            "Free prototype: POST /v1/evidence/pack (no payment). "
-            "Body: {\"text\": \"<json or malformed json>\", \"schema\": {optional JSON Schema}}."
+            "Paid routes: POST /v1/json/reliable (0.003 USDC). "
+            "POST /v1/evidence/pack (0.0075 USDC) when evidence payment is enabled. "
+            "Unpaid calls to paid routes return HTTP 402. "
+            "Body for JSON reliability: {\"text\": \"<json or malformed json>\", \"schema\": {optional JSON Schema}}."
         )
         schema["info"].pop("x-payment-required", None)
         schema["info"].pop("x-x402-paid-path", None)
@@ -305,6 +311,20 @@ def create_json_beta_app() -> FastAPI:
                         "network": configured_network(),
                         "asset": configured_asset(),
                         "amount": atomic_amount(),
+                        "payTo": pay_to,
+                    }
+                }
+            ],
+        }
+        x_payment_info_evidence = {
+            "price": {"mode": "fixed", "currency": "USD", "amount": "0.0075"},
+            "protocols": [
+                {
+                    "x402": {
+                        "scheme": "exact",
+                        "network": configured_network(),
+                        "asset": configured_asset(),
+                        "amount": evidence_atomic_amount(),
                         "payTo": pay_to,
                     }
                 }
@@ -345,25 +365,52 @@ def create_json_beta_app() -> FastAPI:
                 op["security"] = []
                 op.pop("x-payment-required", None)
                 op.pop("x-x402", None)
-                paid_op = path == "/v1/json/reliable" and method == "post"
-                if not paid_op:
-                    continue
-                op["summary"] = "Paid x402 JSON reliability"
-                op["description"] = (
-                    "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. "
-                    "0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free."
-                )
-                op["x-payment-info"] = x_payment_info
-                op["requestBody"] = {
-                    "required": True,
-                    "content": {"application/json": {"schema": reliable_body}},
-                }
-                responses = op.setdefault("responses", {})
-                responses["200"] = {
-                    "description": "JSON reliability result after payment",
-                    "content": {"application/json": {"schema": reliable_200}},
-                }
-                responses["402"] = {"description": "Payment Required"}
+                paid_ajr = path == PAID_AJR and method == "post"
+                paid_ev = path == PAID_EVIDENCE and method == "post" and evidence_payment_flags_on()
+                if paid_ajr:
+                    op["summary"] = "Paid x402 JSON reliability"
+                    op["description"] = (
+                        "Paid x402 v2 exact route. Unpaid requests return HTTP 402 with PAYMENT-REQUIRED. "
+                        "0.003 USDC on Base (eip155:8453). Inspect, validate, repair, and MCP remain free."
+                    )
+                    op["x-payment-info"] = x_payment_info
+                    op["requestBody"] = {
+                        "required": True,
+                        "content": {"application/json": {"schema": reliable_body}},
+                    }
+                    responses = op.setdefault("responses", {})
+                    responses["200"] = {
+                        "description": "JSON reliability result after payment",
+                        "content": {"application/json": {"schema": reliable_200}},
+                    }
+                    responses["402"] = {"description": "Payment Required"}
+                elif paid_ev:
+                    op["summary"] = "Paid x402 Fresh Web Evidence Pack"
+                    op["description"] = (
+                        "Fresh Web Evidence Pack for AI agents. "
+                        "Fetches up to 5 public URLs at request time and returns structured facts with source URLs, "
+                        "UTC timestamps, SHA-256 provenance, and explicit contradictions. "
+                        "0.0075 USDC per pack on Base. Unpaid requests return HTTP 402. "
+                        "Payment is verified before any outbound fetch."
+                    )
+                    op["x-payment-info"] = x_payment_info_evidence
+                    op["requestBody"] = {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "url": {"type": "string"},
+                                        "urls": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+                                    },
+                                }
+                            }
+                        },
+                    }
+                    responses = op.setdefault("responses", {})
+                    responses["200"] = {"description": "Evidence pack after payment"}
+                    responses["402"] = {"description": "Payment Required"}
         return schema
 
     app.openapi = custom_openapi
@@ -390,7 +437,7 @@ def create_json_beta_app() -> FastAPI:
             "x402_middleware_present": True,
             "seller_receive_configured": valid_seller_receive_address(),
             "cdp_auth_configured": cdp_auth_configured(),
-            **paid_metrics(),
+            **split_paid_metrics(),
             **acquisition_metrics(),
             "fresh_web_evidence": evidence_metrics(),
         }
@@ -410,7 +457,13 @@ def create_json_beta_app() -> FastAPI:
             "primary": "/v1/json/reliable",
             "primary_capability": "json_reliable",
             "paid_route": "/v1/json/reliable" if payment_flags_on() else None,
-            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp", "/v1/evidence/pack"],
+            "paid_routes": (
+                [PAID_AJR, PAID_EVIDENCE]
+                if evidence_payment_flags_on()
+                else ([PAID_AJR] if payment_flags_on() else [])
+            ),
+            "free_routes": ["/v1/json/inspect", "/v1/json/validate", "/v1/json/repair", "/mcp"]
+            + ([] if evidence_payment_flags_on() else ["/v1/evidence/pack"]),
             "tools": [s["tool_name"] for s in public_catalog()["services"]],
             "html_exposed": ENABLE_HTML_BETA,
         }
@@ -422,10 +475,18 @@ def create_json_beta_app() -> FastAPI:
     @app.get("/.well-known/x402")
     def well_known_x402():
         base = discovery_server_url()
+        resources = [f"{base}{PAID_AJR}"]
+        instructions = "POST /v1/json/reliable is paid x402 (0.003 USDC). inspect/validate/repair and MCP are free."
+        if evidence_payment_flags_on():
+            resources.append(f"{base}{PAID_EVIDENCE}")
+            instructions = (
+                "Paid x402 resources: POST /v1/json/reliable (0.003 USDC) and "
+                "POST /v1/evidence/pack (0.0075 USDC). inspect/validate/repair and MCP stay free."
+            )
         return {
             "version": 1,
-            "resources": [f"{base}/v1/json/reliable"],
-            "instructions": "POST /v1/json/reliable is the paid x402 resource. inspect/validate/repair and MCP are free.",
+            "resources": resources,
+            "instructions": instructions,
         }
 
     @app.get("/.well-known/agent.json")
@@ -518,7 +579,7 @@ def create_json_beta_app() -> FastAPI:
         _guard_value({"text": text}, schema)
         result = reliable_json(text, schema)
         if payment_flags_on() and getattr(request.state, "x402_verified", None):
-            receipt = settle_payment(request.state.x402_verified, getattr(request.state, "x402_payload", None))
+            receipt = settle_payment(request.state.x402_verified, getattr(request.state, "x402_payload", None), PAID_AJR)
             record_paid_call(
                 {
                     "endpoint": "/v1/json/reliable",
@@ -556,26 +617,97 @@ def create_json_beta_app() -> FastAPI:
 
     @app.post("/v1/evidence/pack")
     async def evidence_pack(request: Request):
+        tpay = time.perf_counter()
+        blocked = maybe_payment_response(request, PAID_EVIDENCE)
+        if blocked is not None:
+            if evidence_payment_flags_on() and blocked.status_code != 402:
+                record_paid_call(
+                    {
+                        "endpoint": PAID_EVIDENCE,
+                        "payer": None,
+                        "network": X402_NETWORK,
+                        "asset": "USDC",
+                        "price": str(EVIDENCE_PRICE_USDC),
+                        "usd_price": str(EVIDENCE_PRICE_USDC),
+                        "tx_hash": None,
+                        "settlement_status": "unpaid_402" if blocked.status_code == 402 else "misconfigured",
+                        "response_status": blocked.status_code,
+                        "processing_ms": (time.perf_counter() - tpay) * 1000,
+                        "is_real": False,
+                    }
+                )
+            return blocked
         body = _read(request)
         try:
             pack = build_pack(body)
         except ValueError as e:
-            code = str(e)
-            status = 400
-            if code == "too_many_urls":
-                status = 400
-            raise HTTPException(status, code) from e
+            raise HTTPException(400, str(e)) from e
         failures = sum(1 for s in pack["sources"] if s.get("error"))
         ok = any(s.get("http_status") == 200 for s in pack["sources"]) and failures < len(pack["sources"])
         if not pack["sources"]:
             ok = False
+        paid_ok = False
+        if evidence_payment_flags_on() and getattr(request.state, "x402_verified", None):
+            receipt = settle_payment(
+                request.state.x402_verified, getattr(request.state, "x402_payload", None), PAID_EVIDENCE
+            )
+            record_paid_call(
+                {
+                    "endpoint": PAID_EVIDENCE,
+                    "payer": receipt.get("payer"),
+                    "network": receipt.get("network") or X402_NETWORK,
+                    "asset": receipt.get("asset") or "USDC",
+                    "price": receipt.get("price") or str(EVIDENCE_PRICE_USDC),
+                    "usd_price": receipt.get("price") or str(EVIDENCE_PRICE_USDC),
+                    "amount_atomic": receipt.get("amount"),
+                    "payTo": receipt.get("payTo"),
+                    "tx_hash": receipt.get("tx_hash"),
+                    "payment_hash": receipt.get("payment_hash"),
+                    "nonce": receipt.get("nonce"),
+                    "verify_status": receipt.get("verify_status"),
+                    "settlement_status": receipt.get("settlement_status"),
+                    "response_status": 200 if receipt.get("settlement_status") in {"settled", "mock_settled"} else 402,
+                    "processing_ms": (time.perf_counter() - tpay) * 1000,
+                    "is_real": bool(receipt.get("is_real")),
+                }
+            )
+            if receipt.get("settlement_status") == "settled":
+                paid_ok = True
+                resp = JSONResponse(pack)
+                resp.headers["PAYMENT-RESPONSE"] = encode_payment_response(receipt)
+                record_pack(
+                    client_hash=getattr(request.state, "client_hash", None),
+                    url_count=len(pack["sources"]),
+                    success=bool(ok),
+                    fetch_failures=failures,
+                    http_status=200,
+                    paid=True,
+                )
+                return resp
+            if receipt.get("settlement_status") == "mock_settled":
+                resp = JSONResponse(pack)
+                resp.headers["PAYMENT-RESPONSE"] = encode_payment_response(receipt)
+                resp.headers["X-AJR-SETTLEMENT"] = "MOCK_NOT_REAL"
+                record_pack(
+                    client_hash=getattr(request.state, "client_hash", None),
+                    url_count=len(pack["sources"]),
+                    success=bool(ok),
+                    fetch_failures=failures,
+                    http_status=200,
+                    paid=False,
+                )
+                return resp
+            return JSONResponse(
+                {"error": "settlement_failed", "settlement_status": receipt.get("settlement_status"), "is_real": False},
+                status_code=402,
+            )
         record_pack(
             client_hash=getattr(request.state, "client_hash", None),
             url_count=len(pack["sources"]),
             success=bool(ok),
             fetch_failures=failures,
             http_status=200,
-            paid=False,
+            paid=paid_ok,
         )
         return pack
 

@@ -108,16 +108,23 @@ def record_paid_call(row: dict[str, Any]) -> None:
         c.close()
 
 
-def paid_metrics() -> dict[str, Any]:
+def paid_metrics(endpoint: str | None = None) -> dict[str, Any]:
     c = _conn()
-    n = c.execute("SELECT COUNT(*) FROM paid_calls WHERE settlement_status='settled' AND is_real=1").fetchone()[0]
+    where = "settlement_status='settled' AND is_real=1"
+    args: list[Any] = []
+    if endpoint:
+        where += " AND endpoint=?"
+        args.append(endpoint)
+    n = c.execute(f"SELECT COUNT(*) FROM paid_calls WHERE {where}", args).fetchone()[0]
     grouped = c.execute(
-        "SELECT payer, COUNT(*) FROM paid_calls WHERE settlement_status='settled' AND is_real=1 AND payer IS NOT NULL AND payer!='' GROUP BY payer"
+        f"SELECT payer, COUNT(*) FROM paid_calls WHERE {where} AND payer IS NOT NULL AND payer!='' GROUP BY payer",
+        args,
     ).fetchall()
     distinct = len(grouped)
     repeat = sum(1 for _p, cnt in grouped if cnt >= 2)
     rows = c.execute(
-        "SELECT COALESCE(usd_price, price), amount_atomic FROM paid_calls WHERE settlement_status='settled' AND is_real=1"
+        f"SELECT COALESCE(usd_price, price), amount_atomic FROM paid_calls WHERE {where}",
+        args,
     ).fetchall()
     revenue = 0.0
     for p, atomic in rows:
@@ -138,4 +145,22 @@ def paid_metrics() -> dict[str, Any]:
         "DISTINCT_REAL_PAID_BUYERS": distinct,
         "REPEAT_REAL_PAID_BUYERS": repeat,
         "REAL_REVENUE_USDC": round(revenue, 6),
+    }
+
+
+def split_paid_metrics() -> dict[str, Any]:
+    total = paid_metrics()
+    ajr = paid_metrics("/v1/json/reliable")
+    ev = paid_metrics("/v1/evidence/pack")
+    return {
+        **total,
+        "AJR_REAL_PAID_CALLS": ajr["REAL_PAID_CALLS"],
+        "AJR_REAL_REVENUE_USDC": ajr["REAL_REVENUE_USDC"],
+        "AJR_DISTINCT_PAID_BUYERS": ajr["DISTINCT_REAL_PAID_BUYERS"],
+        "EVIDENCE_REAL_PAID_CALLS": ev["REAL_PAID_CALLS"],
+        "EVIDENCE_DISTINCT_PAID_BUYERS": ev["DISTINCT_REAL_PAID_BUYERS"],
+        "EVIDENCE_REPEAT_PAID_BUYERS": ev["REPEAT_REAL_PAID_BUYERS"],
+        "EVIDENCE_REAL_REVENUE_USDC": ev["REAL_REVENUE_USDC"],
+        "TOTAL_REAL_PAID_CALLS": total["REAL_PAID_CALLS"],
+        "TOTAL_REAL_REVENUE_USDC": total["REAL_REVENUE_USDC"],
     }

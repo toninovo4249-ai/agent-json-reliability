@@ -15,13 +15,19 @@ from fastapi.responses import JSONResponse
 from products.beta import paid_ledger
 from products.beta.cdp_jwt import SETTLE_PATH, SUPPORTED_PATH, VERIFY_PATH, auth_headers, cdp_auth_configured
 from products.beta.settings import (
+    EVIDENCE_PRICE_ATOMIC,
+    EVIDENCE_PRICE_USDC,
+    MAX_DISTINCT_EVIDENCE_BUYERS,
+    MAX_REAL_EVIDENCE_PAID_CALLS,
     PAID_PRICE_USDC,
     X402_NETWORK,
     X402_USDC_BASE,
     current_base_url,
 )
 
-PAID_HTTP_PATHS = {"/v1/json/reliable"}
+PAID_AJR = "/v1/json/reliable"
+PAID_EVIDENCE = "/v1/evidence/pack"
+PAID_HTTP_PATHS = {PAID_AJR, PAID_EVIDENCE}
 FACILITATOR_CDP = "https://api.cdp.coinbase.com/platform/v2/x402"
 FACILITATOR_PAYAI = "https://facilitator.payai.network"
 FACILITATOR_DEXTER = "https://x402.dexter.cash"
@@ -29,6 +35,7 @@ BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 REQUIRED_NETWORK = "eip155:8453"
 REQUIRED_ATOMIC = "3000"
+REQUIRED_EVIDENCE_ATOMIC = "7500"
 MAX_PAID_REQUESTS_BEFORE_REVIEW = 10
 MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW = 5
 
@@ -39,6 +46,22 @@ def _env_flag(name: str) -> bool:
 
 def payment_flags_on() -> bool:
     return _env_flag("X402_PAYMENT_ENABLED") and _env_flag("PAID_ROUTE_ENABLED")
+
+
+def evidence_payment_flags_on() -> bool:
+    if not payment_flags_on():
+        return False
+    raw = os.environ.get("EVIDENCE_PAID_ROUTE_ENABLED")
+    if raw is None or str(raw).strip() == "":
+        return True
+    return _env_flag("EVIDENCE_PAID_ROUTE_ENABLED")
+
+
+def evidence_first_buyer_mode() -> bool:
+    v = os.environ.get("EVIDENCE_FIRST_BUYER_MODE")
+    if v is None or str(v).strip() == "":
+        return True
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def seller_receive_address() -> str:
@@ -102,6 +125,28 @@ def atomic_amount() -> str:
     return str(int(round(float(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC) * 1_000_000)))
 
 
+def evidence_atomic_amount() -> str:
+    raw = (os.environ.get("EVIDENCE_PRICE_ATOMIC") or "").strip()
+    if raw:
+        try:
+            return str(int(raw))
+        except ValueError:
+            return "INVALID"
+    return str(int(EVIDENCE_PRICE_ATOMIC))
+
+
+def amount_for_path(path: str) -> str:
+    if path == PAID_EVIDENCE:
+        return evidence_atomic_amount()
+    return atomic_amount()
+
+
+def price_usdc_for_path(path: str) -> str:
+    if path == PAID_EVIDENCE:
+        return str(os.environ.get("EVIDENCE_PRICE_USDC") or EVIDENCE_PRICE_USDC)
+    return str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC)
+
+
 def configured_network() -> str:
     return (os.environ.get("X402_NETWORK") or X402_NETWORK or REQUIRED_NETWORK).strip()
 
@@ -110,8 +155,8 @@ def configured_asset() -> str:
     return (os.environ.get("X402_USDC_BASE") or X402_USDC_BASE or BASE_USDC).strip()
 
 
-def paid_route_blockers() -> list[str]:
-    """Fail-closed reasons for the paid route. Empty means config is internally consistent."""
+def paid_route_blockers(path: str = PAID_AJR) -> list[str]:
+    """Fail-closed reasons for a paid route. Empty means config is internally consistent."""
     errs: list[str] = []
     if not valid_seller_receive_address():
         errs.append("seller_receive_address_invalid_or_missing")
@@ -119,14 +164,24 @@ def paid_route_blockers() -> list[str]:
         errs.append("invalid_network")
     if configured_asset().lower() != BASE_USDC.lower():
         errs.append("invalid_asset")
-    if atomic_amount() != REQUIRED_ATOMIC:
-        errs.append("invalid_price")
-    if first_paid_buyer_mode():
-        m = paid_ledger.paid_metrics()
-        if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_PAID_REQUESTS_BEFORE_REVIEW:
-            errs.append("first_paid_buyer_max_requests")
-        if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW:
-            errs.append("first_paid_buyer_max_buyers")
+    if path == PAID_EVIDENCE:
+        if evidence_atomic_amount() != REQUIRED_EVIDENCE_ATOMIC:
+            errs.append("invalid_evidence_price")
+        if evidence_first_buyer_mode():
+            m = paid_ledger.paid_metrics(PAID_EVIDENCE)
+            if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_REAL_EVIDENCE_PAID_CALLS:
+                errs.append("evidence_first_paid_max_requests")
+            if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_EVIDENCE_BUYERS:
+                errs.append("evidence_first_paid_max_buyers")
+    else:
+        if atomic_amount() != REQUIRED_ATOMIC:
+            errs.append("invalid_price")
+        if first_paid_buyer_mode():
+            m = paid_ledger.paid_metrics(PAID_AJR)
+            if int(m.get("REAL_PAID_CALLS") or 0) >= MAX_PAID_REQUESTS_BEFORE_REVIEW:
+                errs.append("first_paid_buyer_max_requests")
+            if int(m.get("DISTINCT_REAL_PAID_BUYERS") or 0) >= MAX_DISTINCT_PAID_BUYERS_BEFORE_REVIEW:
+                errs.append("first_paid_buyer_max_buyers")
     mode = facilitator_mode()
     if mode == "blocked":
         errs.append("mainnet_payment_disabled")
@@ -167,23 +222,66 @@ def bazaar_extensions() -> dict[str, Any]:
     }
 
 
-def payment_requirements(resource_path: str = "/v1/json/reliable") -> dict[str, Any]:
+def evidence_bazaar_extensions() -> dict[str, Any]:
+    return {
+        "bazaar": {
+            "info": {
+                "input": {
+                    "type": "http",
+                    "method": "POST",
+                    "bodyType": "json",
+                    "bodySchema": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"},
+                            "urls": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+                        },
+                    },
+                },
+                "output": {
+                    "example": {
+                        "facts": [],
+                        "sources": [],
+                        "contradictions": [],
+                        "confidence": 0.55,
+                        "warnings": [],
+                    }
+                },
+            }
+        }
+    }
+
+
+def payment_requirements(resource_path: str = PAID_AJR) -> dict[str, Any]:
     url = current_base_url().rstrip("/") + resource_path
-    price = os.environ.get("PAID_PRICE_USDC") or str(PAID_PRICE_USDC)
     pay_to = seller_receive_address() if valid_seller_receive_address() else ""
+    if resource_path == PAID_EVIDENCE:
+        desc = (
+            "Fresh Web Evidence Pack for AI agents. "
+            "Fetches up to 5 public URLs at request time and returns structured facts with source URLs, "
+            "UTC timestamps, SHA-256 provenance, and explicit contradictions."
+        )
+        amount = evidence_atomic_amount()
+        price = price_usdc_for_path(PAID_EVIDENCE)
+        ext = evidence_bazaar_extensions()
+    else:
+        desc = "Deterministic JSON inspect, safe repair, and optional JSON Schema validation."
+        amount = atomic_amount()
+        price = price_usdc_for_path(PAID_AJR)
+        ext = bazaar_extensions()
     return {
         "x402Version": 2,
         "error": "PAYMENT-SIGNATURE header is required",
         "resource": {
             "url": url,
-            "description": "Deterministic JSON inspect, safe repair, and optional JSON Schema validation.",
+            "description": desc,
             "mimeType": "application/json",
         },
         "accepts": [
             {
                 "scheme": "exact",
                 "network": configured_network(),
-                "amount": atomic_amount(),
+                "amount": amount,
                 "asset": configured_asset(),
                 "payTo": pay_to,
                 "maxTimeoutSeconds": 60,
@@ -194,7 +292,7 @@ def payment_requirements(resource_path: str = "/v1/json/reliable") -> dict[str, 
                 },
             }
         ],
-        "extensions": bazaar_extensions(),
+        "extensions": ext,
         "price_usdc": price,
         "facilitator": facilitator_base_url(),
         "facilitator_name": "PayAI" if selected_facilitator() != "cdp" else "CDP",
@@ -329,7 +427,7 @@ def probe_facilitator_supported() -> dict[str, Any]:
         }
 
 
-def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> dict[str, Any]:
+def verify_payment(payload: dict[str, Any] | None, raw_header: str | None, path: str = PAID_AJR) -> dict[str, Any]:
     mode = facilitator_mode()
     if mode == "off":
         return {"verify_status": "skipped_flag_off", "is_real": False}
@@ -350,7 +448,7 @@ def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> di
             "nonce": nonce,
             "note": "MOCK_NOT_REAL_SETTLEMENT",
         }
-    reqs = payment_requirements()
+    reqs = payment_requirements(path)
     out = _facilitator_post("verify", payload, reqs)
     if not out.get("ok"):
         return {"verify_status": "verify_failed", "is_real": False, "detail": out.get("error"), "payment_hash": ph}
@@ -365,7 +463,7 @@ def verify_payment(payload: dict[str, Any] | None, raw_header: str | None) -> di
     }
 
 
-def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any]:
+def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None, path: str = PAID_AJR) -> dict[str, Any]:
     mode = facilitator_mode()
     if mode == "off":
         return {"settlement_status": "skipped_flag_off", "tx_hash": None, "is_real": False}
@@ -380,8 +478,8 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
             "payTo": seller_receive_address(),
             "network": configured_network(),
             "asset": "USDC",
-            "amount": atomic_amount(),
-            "price": str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC),
+            "amount": amount_for_path(path),
+            "price": price_usdc_for_path(path),
             "note": "MOCK_NOT_REAL_SETTLEMENT",
             "payment_hash": verified.get("payment_hash"),
             "nonce": verified.get("nonce"),
@@ -389,7 +487,7 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
         }
     if mode not in {"cdp", "payai", "dexter"} or payload is None:
         return {"settlement_status": "blocked_mainnet_flag_off", "tx_hash": None, "is_real": False}
-    out = _facilitator_post("settle", payload, payment_requirements())
+    out = _facilitator_post("settle", payload, payment_requirements(path))
     if not out.get("ok") or not out.get("is_real"):
         return {"settlement_status": "settle_failed", "tx_hash": None, "is_real": False, "detail": out.get("error")}
     data = out.get("data") or {}
@@ -402,8 +500,8 @@ def settle_payment(verified: dict[str, Any], payload: dict[str, Any] | None) -> 
         "payTo": seller_receive_address(),
         "network": configured_network(),
         "asset": "USDC",
-        "amount": atomic_amount(),
-        "price": str(os.environ.get("PAID_PRICE_USDC") or PAID_PRICE_USDC),
+        "amount": amount_for_path(path),
+        "price": price_usdc_for_path(path),
         "payment_hash": verified.get("payment_hash"),
         "nonce": verified.get("nonce"),
         "verify_status": verified.get("verify_status"),
@@ -418,17 +516,21 @@ def encode_payment_response(receipt: dict[str, Any]) -> str:
 
 
 def maybe_payment_response(request: Request, path: str) -> JSONResponse | None:
-    """Verify-before-work. Returns 402/503 or None to proceed. Does not settle."""
-    if path not in PAID_HTTP_PATHS:
+    """Verify-before-work. Returns 402/503 or None to proceed. Does not settle. Does not fetch."""
+    if path == PAID_EVIDENCE:
+        if not evidence_payment_flags_on():
+            return None
+    elif path == PAID_AJR:
+        if not payment_flags_on():
+            return None
+    else:
         return None
-    if not payment_flags_on():
-        return None
-    blockers = paid_route_blockers()
+    blockers = paid_route_blockers(path)
     if blockers:
         return _503(blockers)
     raw = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature")
     payload = decode_payment_signature(raw)
-    verified = verify_payment(payload, raw)
+    verified = verify_payment(payload, raw, path)
     if verified.get("verify_status") in {"verified", "mock_valid"}:
         request.state.x402_verified = verified
         request.state.x402_payload = payload
