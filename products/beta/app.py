@@ -260,7 +260,7 @@ def create_json_beta_app() -> FastAPI:
             "PUBLIC_BETA_CONFIRM": PUBLIC_BETA_CONFIRM,
             "PUBLIC_EXPOSURE_MODE": public_exposure_mode(),
             "primary": "/v1/json/reliable",
-            "x402_payment_integrated": False,
+            "x402_payment_integrated": payment_flags_on(),
             "X402_PAYMENT_ENABLED": X402_PAYMENT_ENABLED,
             "PAID_ROUTE_ENABLED": PAID_ROUTE_ENABLED,
             "FIRST_PAID_BUYER_MODE": FIRST_PAID_BUYER_MODE,
@@ -346,7 +346,7 @@ def create_json_beta_app() -> FastAPI:
         tpay = time.perf_counter()
         blocked = maybe_payment_response(request, "/v1/json/reliable")
         if blocked is not None:
-            if payment_flags_on():
+            if payment_flags_on() and blocked.status_code != 402:
                 record_paid_call(
                     {
                         "endpoint": "/v1/json/reliable",

@@ -187,11 +187,17 @@ def payment_requirements(resource_path: str = "/v1/json/reliable") -> dict[str, 
                 "asset": configured_asset(),
                 "payTo": pay_to,
                 "maxTimeoutSeconds": 60,
-                "extra": {"name": "USDC", "version": "2"},
+                "extra": {
+                    "name": "USDC",
+                    "version": "2",
+                    "transferMethod": "eip3009",
+                },
             }
         ],
         "extensions": bazaar_extensions(),
         "price_usdc": price,
+        "facilitator": facilitator_base_url(),
+        "facilitator_name": "PayAI" if selected_facilitator() != "cdp" else "CDP",
     }
 
 

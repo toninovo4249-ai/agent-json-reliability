@@ -16,11 +16,13 @@ services:
       - key: FREE_BETA
         value: "true"
       - key: X402_PAYMENT_ENABLED
-        value: "false"
+        value: "true"
       - key: PAID_ROUTE_ENABLED
-        value: "false"
+        value: "true"
       - key: MAINNET_PAYMENT_ENABLED
-        value: "false"
+        value: "true"
+      - key: X402_FACILITATOR
+        value: "payai"
       - key: FIRST_PAID_BUYER_MODE
         value: "true"
       - key: SELLER_SPEND_ALLOWED

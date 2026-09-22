@@ -47,6 +47,8 @@ def test_mock_402_without_signature(monkeypatch, tmp_path):
     assert body["x402Version"] == 2
     assert body["accepts"][0]["network"] == "eip155:8453"
     assert body["accepts"][0]["amount"] == "3000"
+    assert body["accepts"][0]["extra"]["transferMethod"] == "eip3009"
+    assert body["facilitator_name"] in {"PayAI", "CDP"}
 
 
 def test_mock_settle_is_not_real(monkeypatch, tmp_path):
@@ -71,4 +73,5 @@ def test_requirements_price_atomic():
     req = payment_requirements()
     assert req["x402Version"] == 2
     assert req["accepts"][0]["asset"].startswith("0x")
+    assert req["accepts"][0]["extra"]["transferMethod"] == "eip3009"
     assert "bazaar" in req["extensions"]

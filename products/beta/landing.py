@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from products.beta.settings import current_base_url, public_exposure_mode
+from products.beta.x402_gate import payment_flags_on
 
 
 def landing_html() -> str:
@@ -70,7 +71,7 @@ def landing_html() -> str:
      · <a href="/?source=mcp-directory">?source=mcp-directory</a>
      · <a href="/?source=community">?source=community</a>
      · <a href="/?source=direct">?source=direct</a></p>
-  <p>FREE BETA. AUTH: NONE. payment_required=false. Not a paid x402 endpoint.</p>
+  <p>Inspect, validate, repair, and MCP are free. POST /v1/json/reliable is {"x402 exact 0.003 USDC on Base" if payment_flags_on() else "currently free (payment flags off)"}.</p>
 </body>
 </html>
 """
