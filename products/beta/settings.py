@@ -89,6 +89,7 @@ PUBLIC_PATHS = {
     "/capabilities",
     "/openapi.json",
     "/.well-known/agent-services.json",
+    "/.well-known/mcp/server-card.json",
     "/robots.txt",
     "/llms.txt",
     "/AGENTS.md",

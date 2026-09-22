@@ -24,6 +24,10 @@ def test_local_http_mcp_parity():
     listed = handle_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     names = {t["name"] for t in listed["result"]["tools"]}
     assert names == {"validate_json", "repair_json", "inspect_json", "reliable_json"}
+    card = client.get("/.well-known/mcp/server-card.json").json()
+    assert card["authentication"]["required"] is False
+    assert card["configSchema"] == {"type": "object", "properties": {}, "additionalProperties": False}
+    assert {t["name"] for t in card["tools"]} == names
     ref = reliable_json(REFUSAL, None)
     assert ref["valid_final"] is False
     assert ref["unsafe_or_ambiguous"] is True or ref["repaired"] is False

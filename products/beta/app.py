@@ -56,7 +56,7 @@ from products.beta.x402_gate import (
     payment_flags_on,
     settle_payment,
 )
-from products.gateway.mcp_server import handle_rpc
+from products.gateway.mcp_server import handle_rpc, mcp_server_card
 from products.gateway.rate_limit import RateLimiter
 
 ALLOWED_PREFIX = ("/v1/json/", "/.well-known/")
@@ -129,6 +129,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
         disc = path if path in {
             "/",
             "/.well-known/agent-services.json",
+            "/.well-known/mcp/server-card.json",
             "/capabilities",
             "/openapi.json",
             "/health",
@@ -284,6 +285,10 @@ def create_json_beta_app() -> FastAPI:
     @app.get("/.well-known/agent-services.json")
     def manifest():
         return public_catalog()
+
+    @app.get("/.well-known/mcp/server-card.json")
+    def mcp_server_card_route():
+        return mcp_server_card()
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     def robots():

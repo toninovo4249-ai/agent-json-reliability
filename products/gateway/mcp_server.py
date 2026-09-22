@@ -9,6 +9,11 @@ from products.agent_json_reliability.validate import validate_json
 from products.gateway.manifest import tools
 
 JSON_TOOL_NAMES = ("validate_json", "repair_json", "inspect_json", "reliable_json")
+EMPTY_CONFIG_SCHEMA = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
 
 
 def mcp_tools() -> list[dict[str, Any]]:
@@ -19,6 +24,17 @@ def mcp_tools() -> list[dict[str, Any]]:
             continue
         out.append({"name": name, "description": t["description"], "inputSchema": t["input_schema"]})
     return out
+
+
+def mcp_server_card() -> dict[str, Any]:
+    return {
+        "serverInfo": {"name": "agent-json-reliability", "version": "0.1.0"},
+        "authentication": {"required": False, "schemes": []},
+        "configSchema": EMPTY_CONFIG_SCHEMA,
+        "tools": mcp_tools(),
+        "resources": [],
+        "prompts": [],
+    }
 
 
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:

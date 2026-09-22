@@ -1,0 +1,10 @@
+# Smithery metadata for URL/HTTP publish. No credentials, no dummy fields.
+# Docs: https://smithery.ai/docs/build/publish  https://smithery.ai/docs/build/session-config
+startCommand:
+  type: http
+  configSchema:
+    type: object
+    properties: {}
+    additionalProperties: false
+    description: No configuration is required.
+  exampleConfig: {}
