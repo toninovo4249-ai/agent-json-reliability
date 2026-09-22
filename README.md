@@ -10,6 +10,14 @@ No LLM. Safe refusal on ambiguity.
 
 STATUS=BETA `0.1.0` · [GitHub](https://github.com/toninovo4249-ai/agent-json-reliability) · [PyPI](https://pypi.org/project/agent-json-reliability/) · [Official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.toninovo4249-ai%2Fagent-json-reliability)
 
+**Problem:** agents emit malformed JSON (fences, trailing commas, single quotes). This tool inspects, safely repairs, and schema-validates that text. No LLM. No invented values.
+
+| Path | Cost |
+| --- | --- |
+| Local MCP (`uvx agent-json-reliability`) | Free |
+| Hosted `POST /v1/json/inspect`, `/validate`, `/repair`, `/mcp` | Free |
+| Hosted `POST /v1/json/reliable` | **0.003 USDC** on Base via x402 |
+
 ## Quick start
 
 ```bash
@@ -87,11 +95,24 @@ python serve.py
 
 Binds `127.0.0.1:8770` by default. Set `PUBLIC_BASE_URL` to an HTTPS origin only when you expose the process yourself. Do not commit a temporary tunnel hostname as the canonical URL.
 
+## Hosted API (x402)
+
+Public origin: `https://agent-json-reliability.onrender.com`
+
+Inspect / validate / repair / MCP stay free. `POST /v1/json/reliable` returns HTTP 402 until an x402 `PAYMENT-SIGNATURE` settles **3000 atomic USDC (0.003)** on Base (`eip155:8453`) via PayAI.
+
+```bash
+curl -s -D - -o /tmp/ajr.json -X POST https://agent-json-reliability.onrender.com/v1/json/reliable \
+  -H "content-type: application/json" \
+  -d '{"text":"{'\''a'\'': 1}"}'
+# Expect: HTTP/1.1 402  and a PAYMENT-REQUIRED header. Do not send a signature unless you intend to pay.
+```
+
 ## HTTP examples
 
 See `examples/curl.md`, `examples/python.py`, `examples/javascript.js`.
 
-Remote examples use `${PUBLIC_BASE_URL}`. Local default is `http://127.0.0.1:8770`.
+Remote examples use `https://agent-json-reliability.onrender.com`. Local default is `http://127.0.0.1:8770`.
 
 Share URLs (optional, unverified telemetry tags):
 
@@ -126,6 +147,4 @@ Remote HTTP MCP (`POST /mcp`) is for a running instance.
 
 ## What this package does not include
 
-No Hunter market database, no private reports, no Windows user paths, no collectors, no wallets, no x402 payment.
-
-Free beta: no auth, no payment.
+No Hunter market database, no private reports, no Windows user paths, no collectors, no wallets in this package. Hosted `/v1/json/reliable` is x402-paid; local MCP and inspect/validate/repair are free.
