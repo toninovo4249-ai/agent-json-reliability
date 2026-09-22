@@ -124,7 +124,10 @@ class BetaMiddleware(BaseHTTPMiddleware):
         ctype, conf = ua_coarse(ua)
         ch = client_hash(request.client.host if request.client else None, ua)
         src = request.query_params.get("source")
-        if _tool_path(path):
+        pay_sig_early = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
+        unpaid_paid = path in PAID_HTTP_PATHS and not pay_sig_early
+        acquired_sem = False
+        if _tool_path(path) and not unpaid_paid:
             if not limiter.allow(ch):
                 record_v16(
                     {
@@ -147,12 +150,13 @@ class BetaMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"error": "rate_limited", "error_class": "rate_limited"}, status_code=429)
             if not sem.acquire(blocking=False):
                 return JSONResponse({"error": "too_many_concurrent", "error_class": "concurrency"}, status_code=429)
+            acquired_sem = True
         try:
             body = await request.body()
         except Exception:
             body = b""
         if len(body) > MAX_REQUEST_BODY_BYTES:
-            if _tool_path(path):
+            if acquired_sem:
                 sem.release()
             return JSONResponse({"error": "payload too large", "error_class": "oversized"}, status_code=413)
 
@@ -175,7 +179,7 @@ class BetaMiddleware(BaseHTTPMiddleware):
             if resp is None:
                 resp = await call_next(request)
         finally:
-            if _tool_path(path):
+            if acquired_sem:
                 try:
                     sem.release()
                 except ValueError:
