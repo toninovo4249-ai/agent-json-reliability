@@ -50,7 +50,12 @@ from products.beta.settings import (
 )
 from products.beta.paid_ledger import record_paid_call
 from products.beta.store import record_v16
-from products.beta.x402_gate import maybe_payment_response, payment_flags_on
+from products.beta.x402_gate import (
+    encode_payment_response,
+    maybe_payment_response,
+    payment_flags_on,
+    settle_payment,
+)
 from products.gateway.mcp_server import handle_rpc
 from products.gateway.rate_limit import RateLimiter
 
@@ -341,6 +346,7 @@ def create_json_beta_app() -> FastAPI:
                         "settlement_status": "unpaid_402" if blocked.status_code == 402 else "misconfigured",
                         "response_status": blocked.status_code,
                         "processing_ms": (time.perf_counter() - tpay) * 1000,
+                        "is_real": False,
                     }
                 )
             return blocked
@@ -350,7 +356,40 @@ def create_json_beta_app() -> FastAPI:
             raise HTTPException(400, "empty_text")
         schema = body.get("schema") if isinstance(body.get("schema"), dict) else None
         _guard_value({"text": text}, schema)
-        return reliable_json(text, schema)
+        result = reliable_json(text, schema)
+        if payment_flags_on() and getattr(request.state, "x402_verified", None):
+            receipt = settle_payment(request.state.x402_verified, getattr(request.state, "x402_payload", None))
+            record_paid_call(
+                {
+                    "endpoint": "/v1/json/reliable",
+                    "payer": receipt.get("payer"),
+                    "network": receipt.get("network") or X402_NETWORK,
+                    "asset": receipt.get("asset") or "USDC",
+                    "price": receipt.get("price") or str(PAID_PRICE_USDC),
+                    "amount_atomic": receipt.get("amount"),
+                    "tx_hash": receipt.get("tx_hash"),
+                    "payment_hash": receipt.get("payment_hash"),
+                    "nonce": receipt.get("nonce"),
+                    "settlement_status": receipt.get("settlement_status"),
+                    "response_status": 200 if receipt.get("settlement_status") in {"settled", "mock_settled"} else 402,
+                    "processing_ms": (time.perf_counter() - tpay) * 1000,
+                    "is_real": bool(receipt.get("is_real")),
+                }
+            )
+            if receipt.get("settlement_status") == "settled":
+                resp = JSONResponse(result)
+                resp.headers["PAYMENT-RESPONSE"] = encode_payment_response(receipt)
+                return resp
+            if receipt.get("settlement_status") == "mock_settled":
+                resp = JSONResponse(result)
+                resp.headers["PAYMENT-RESPONSE"] = encode_payment_response(receipt)
+                resp.headers["X-AJR-SETTLEMENT"] = "MOCK_NOT_REAL"
+                return resp
+            return JSONResponse(
+                {"error": "settlement_failed", "settlement_status": receipt.get("settlement_status"), "is_real": False},
+                status_code=402,
+            )
+        return result
 
     @app.post("/v1/json/reliable/batch")
     async def batch(request: Request):
