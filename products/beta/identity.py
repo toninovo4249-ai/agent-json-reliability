@@ -42,6 +42,18 @@ DIRECTORY_CRAWLER_HINTS = (
     "awesome-mcp",
     "mcpservers.org",
     "mcp.directory",
+    "x402scan",
+    "agentcash",
+    "402index",
+    "payai",
+    "lobehub",
+)
+
+SELF_HINTS = (
+    "x402-hunter",
+    "cursor/",
+    "cursor-ide",
+    "render/",
 )
 
 
@@ -137,6 +149,8 @@ def traffic_kind(headers: Any, ua: str | None, client_host: str | None, path: st
         return "INTERNAL_TEST"
     if h.get(SYNTHETIC_HEADER) in {"1", "true"}:
         return "SYNTHETIC_EXTERNAL_BUYER"
+    if any(x in ual for x in SELF_HINTS):
+        return "KNOWN_SELF_TEST"
     if any(x in ual for x in SCANNER_HINTS) and "python-httpx" not in ual:
         return "SECURITY_SCAN"
     if any(x in ual for x in CRAWLER_HINTS) or any(x in ual for x in DIRECTORY_CRAWLER_HINTS):

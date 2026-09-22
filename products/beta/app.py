@@ -50,6 +50,7 @@ from products.beta.settings import (
     discovery_server_url,
     public_exposure_mode,
 )
+from products.beta.acquisition import acquisition_metrics
 from products.beta.cdp_jwt import cdp_auth_configured
 from products.beta.paid_ledger import paid_metrics, record_paid_call
 from products.beta.store import record_v16
@@ -161,6 +162,9 @@ class BetaMiddleware(BaseHTTPMiddleware):
             probe = "RANDOM_PROBE"
             if kind == "REAL_EXTERNAL_UNKNOWN":
                 kind = "RANDOM_PROBE"
+        pay_sig = bool(request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("payment-signature"))
+        if path == "/v1/json/reliable" and pay_sig:
+            probe = "payment_attempt"
         mcp_product_call = False
         if path == "/mcp":
             try:
@@ -363,6 +367,7 @@ def create_json_beta_app() -> FastAPI:
             "seller_receive_configured": valid_seller_receive_address(),
             "cdp_auth_configured": cdp_auth_configured(),
             **paid_metrics(),
+            **acquisition_metrics(),
         }
 
     @app.get("/ready")
