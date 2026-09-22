@@ -33,10 +33,10 @@ def is_https_public(url: str | None = None) -> bool:
 
 def public_exposure_mode(url: str | None = None) -> str:
     u = (url or current_base_url()).lower()
-    if "trycloudflare.com" in u:
+    if "trycloudflare.com" in u or "ngrok" in u:
         return "DEVELOPMENT_TEMPORARY"
     if is_https_public(u):
-        return "DEVELOPMENT_TEMPORARY"
+        return "DURABLE_PUBLIC"
     return "LOCAL_ONLY"
 
 
@@ -48,6 +48,19 @@ else:
     PUBLIC_BETA_ENABLED = False
 FREE_BETA = _b("FREE_BETA", True)
 PAYMENT_REQUIRED = _b("PAYMENT_REQUIRED", False)
+X402_PAYMENT_ENABLED = _b("X402_PAYMENT_ENABLED", False)
+PAID_ROUTE_ENABLED = _b("PAID_ROUTE_ENABLED", False)
+MAINNET_PAYMENT_ENABLED = _b("MAINNET_PAYMENT_ENABLED", False)
+FIRST_PAID_BUYER_MODE = _b("FIRST_PAID_BUYER_MODE", True)
+SELLER_SPEND_ALLOWED = _b("SELLER_SPEND_ALLOWED", False)
+SELLER_RECEIVE_ADDRESS = (os.environ.get("SELLER_RECEIVE_ADDRESS") or "").strip()
+X402_NETWORK = (os.environ.get("X402_NETWORK") or "eip155:8453").strip()
+X402_USDC_BASE = (os.environ.get("X402_USDC_BASE") or "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").strip()
+try:
+    PAID_PRICE_USDC = float(os.environ.get("PAID_PRICE_USDC") or "0.003")
+except ValueError:
+    PAID_PRICE_USDC = 0.003
+PAID_LEDGER_PATH = Path(os.environ.get("PAID_LEDGER_PATH") or str(ROOT / "data" / "paid_ledger.sqlite"))
 ENABLE_HTML_BETA = False
 BATCH_PUBLIC = _b("BATCH_PUBLIC", False)
 MAX_REQUEST_BODY_BYTES = _i("MAX_REQUEST_BODY_BYTES", 262144)

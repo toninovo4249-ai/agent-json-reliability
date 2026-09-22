@@ -46,6 +46,8 @@ def public_catalog() -> dict:
         "public_https": is_https_public(base),
         "services": ts,
         "x402_payments": False,
+        "X402_PAYMENT_ENABLED": False,
+        "PAID_ROUTE_ENABLED": False,
         "BAZAAR_ELIGIBLE": False,
         "limits": {
             "MAX_REQUEST_BODY_BYTES": 262144,

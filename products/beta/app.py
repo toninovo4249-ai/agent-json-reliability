@@ -26,6 +26,7 @@ from products.beta.settings import (
     BATCH_PUBLIC,
     BETA_VERSION,
     ENABLE_HTML_BETA,
+    FIRST_PAID_BUYER_MODE,
     FREE_BETA,
     MAX_ARRAY_LEN,
     MAX_BATCH,
@@ -37,13 +38,19 @@ from products.beta.settings import (
     MAX_REQUESTS_PER_MINUTE_PER_SESSION,
     MAX_SCHEMA_DEPTH,
     MAX_STRING_CHARS,
+    PAID_PRICE_USDC,
+    PAID_ROUTE_ENABLED,
     PAYMENT_REQUIRED,
     PUBLIC_BETA_CONFIRM,
     PUBLIC_PATHS,
+    X402_NETWORK,
+    X402_PAYMENT_ENABLED,
     current_base_url,
     public_exposure_mode,
 )
+from products.beta.paid_ledger import record_paid_call
 from products.beta.store import record_v16
+from products.beta.x402_gate import maybe_payment_response, payment_flags_on
 from products.gateway.mcp_server import handle_rpc
 from products.gateway.rate_limit import RateLimiter
 
@@ -245,6 +252,10 @@ def create_json_beta_app() -> FastAPI:
             "PUBLIC_EXPOSURE_MODE": public_exposure_mode(),
             "primary": "/v1/json/reliable",
             "x402_payment_integrated": False,
+            "X402_PAYMENT_ENABLED": X402_PAYMENT_ENABLED,
+            "PAID_ROUTE_ENABLED": PAID_ROUTE_ENABLED,
+            "FIRST_PAID_BUYER_MODE": FIRST_PAID_BUYER_MODE,
+            "x402_middleware_present": True,
         }
 
     @app.get("/ready")
@@ -315,6 +326,24 @@ def create_json_beta_app() -> FastAPI:
 
     @app.post("/v1/json/reliable")
     async def reliable(request: Request):
+        tpay = time.perf_counter()
+        blocked = maybe_payment_response(request, "/v1/json/reliable")
+        if blocked is not None:
+            if payment_flags_on():
+                record_paid_call(
+                    {
+                        "endpoint": "/v1/json/reliable",
+                        "payer": None,
+                        "network": X402_NETWORK,
+                        "asset": "USDC",
+                        "price": str(PAID_PRICE_USDC),
+                        "tx_hash": None,
+                        "settlement_status": "unpaid_402" if blocked.status_code == 402 else "misconfigured",
+                        "response_status": blocked.status_code,
+                        "processing_ms": (time.perf_counter() - tpay) * 1000,
+                    }
+                )
+            return blocked
         body = _read(request)
         text = str(body.get("text") or "")
         if not text.strip():
